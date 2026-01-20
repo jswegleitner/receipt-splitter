@@ -18,6 +18,10 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
   
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+  
   <style>
     body {
       margin: 0;
@@ -31,6 +35,23 @@
 </head>
 <body>
   <div id="root"></div>
+
+  <script>
+    // Firebase Configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyAWU9MLMuHpBWbnWtVwLBQbJKwZXs59hWo",
+      authDomain: "receipt-splitter-a199b.firebaseapp.com",
+      databaseURL: "https://receipt-splitter-a199b-default-rtdb.firebaseio.com",
+      projectId: "receipt-splitter-a199b",
+      storageBucket: "receipt-splitter-a199b.firebasestorage.app",
+      messagingSenderId: "930736923507",
+      appId: "1:930736923507:web:3efacf3a3c46870e6bdb06"
+    };
+    
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+  </script>
 
   <script type="text/babel">
     const { useState, useEffect } = React;
@@ -78,13 +99,233 @@
       const [ocrError, setOcrError] = useState('');
       const [rawOcrText, setRawOcrText] = useState('');
       const [showRawText, setShowRawText] = useState(false);
+      const [isSharedView, setIsSharedView] = useState(false);
+      const [isClaimMode, setIsClaimMode] = useState(false);
+      const [showImportModal, setShowImportModal] = useState(false);
+      const [importCode, setImportCode] = useState('');
+      
+      // Room-based collaboration
+      const [roomCode, setRoomCode] = useState('');
+      const [isHost, setIsHost] = useState(false);
+      const [showJoinModal, setShowJoinModal] = useState(false);
+      const [joinCode, setJoinCode] = useState('');
+      const [roomError, setRoomError] = useState('');
+      const [isConnected, setIsConnected] = useState(false);
       
       // Replace with your Google Cloud Vision API key
       const GOOGLE_VISION_API_KEY = localStorage.getItem('google_vision_api_key') || '';
 
+      // Generate a short room code
+      const generateRoomCode = () => {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let code = '';
+        for (let i = 0; i < 5; i++) {
+          code += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return code;
+      };
+
+      // Create a new room
+      const createRoom = async () => {
+        const code = generateRoomCode();
+        const roomRef = database.ref(`rooms/${code}`);
+        
+        const roomData = {
+          items,
+          people,
+          claims,
+          claimQuantities,
+          tax,
+          tip,
+          tipType,
+          createdAt: Date.now(),
+          hostId: sessionId
+        };
+        
+        await roomRef.set(roomData);
+        setRoomCode(code);
+        setIsHost(true);
+        setIsConnected(true);
+        
+        // Start listening for changes
+        subscribeToRoom(code);
+        
+        return code;
+      };
+
+      // Join an existing room
+      const joinRoom = async (code) => {
+        const upperCode = code.toUpperCase().trim();
+        const roomRef = database.ref(`rooms/${upperCode}`);
+        
+        const snapshot = await roomRef.get();
+        if (!snapshot.exists()) {
+          setRoomError('Room not found. Check the code and try again.');
+          return false;
+        }
+        
+        const data = snapshot.val();
+        setItems(data.items || []);
+        setPeople(data.people || []);
+        setClaims(data.claims || {});
+        setClaimQuantities(data.claimQuantities || {});
+        setTax(data.tax || 0);
+        setTip(data.tip || 0);
+        setTipType(data.tipType || 'percent');
+        setRoomCode(upperCode);
+        setIsHost(false);
+        setIsConnected(true);
+        setStep('split');
+        setShowJoinModal(false);
+        setJoinCode('');
+        setRoomError('');
+        
+        // Start listening for changes
+        subscribeToRoom(upperCode);
+        
+        return true;
+      };
+
+      // Subscribe to real-time updates
+      const subscribeToRoom = (code) => {
+        const roomRef = database.ref(`rooms/${code}`);
+        
+        roomRef.on('value', (snapshot) => {
+          if (snapshot.exists()) {
+            const data = snapshot.val();
+            setItems(data.items || []);
+            setPeople(data.people || []);
+            setClaims(data.claims || {});
+            setClaimQuantities(data.claimQuantities || {});
+            setTax(data.tax || 0);
+            setTip(data.tip || 0);
+            setTipType(data.tipType || 'percent');
+          }
+        });
+      };
+
+      // Update room data (called when changes are made)
+      const updateRoom = (updates) => {
+        if (!roomCode || !isConnected) return;
+        
+        const roomRef = database.ref(`rooms/${roomCode}`);
+        roomRef.update({
+          ...updates,
+          updatedAt: Date.now()
+        });
+      };
+
+      // Sync items to room when they change
       useEffect(() => {
+        if (isConnected && roomCode) {
+          updateRoom({ items, people, claims, claimQuantities, tax, tip, tipType });
+        }
+      }, [items, people, claims, claimQuantities, tax, tip, tipType]);
+
+      // Clean up old rooms (>7 days) - runs on app load
+      const cleanupOldRooms = async () => {
+        const roomsRef = database.ref('rooms');
+        const snapshot = await roomsRef.get();
+        if (snapshot.exists()) {
+          const rooms = snapshot.val();
+          const oneWeekAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+          
+          Object.keys(rooms).forEach(async (code) => {
+            if (rooms[code].createdAt < oneWeekAgo) {
+              await database.ref(`rooms/${code}`).remove();
+            }
+          });
+        }
+      };
+
+      // Leave room and unsubscribe
+      const leaveRoom = () => {
+        if (roomCode) {
+          database.ref(`rooms/${roomCode}`).off();
+        }
+        setRoomCode('');
+        setIsHost(false);
+        setIsConnected(false);
+      };
+
+      // Share room link
+      const shareRoomLink = async () => {
+        const url = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+        
+        if (navigator.share) {
+          try {
+            await navigator.share({
+              title: 'Join my receipt split!',
+              text: `Join with code: ${roomCode}`,
+              url: url
+            });
+            return;
+          } catch (e) {}
+        }
+        
+        try {
+          await navigator.clipboard.writeText(url);
+          alert(`Room link copied! Share this with friends:\\n\\nCode: ${roomCode}`);
+        } catch (e) {
+          prompt('Share this link:', url);
+        }
+      };
+
+      useEffect(() => {
+        // Clean up old rooms on app load
+        cleanupOldRooms();
+        
         const urlParams = new URLSearchParams(window.location.search);
+        const roomParam = urlParams.get('room');
+        
+        // Check for room code in URL
+        if (roomParam) {
+          joinRoom(roomParam);
+          return;
+        }
+
         const sid = urlParams.get('s');
+        const shareData = urlParams.get('share');
+        const claimData = urlParams.get('claim');
+        
+        // Check for claim mode link (friends claiming their items)
+        if (claimData) {
+          try {
+            const decoded = JSON.parse(atob(claimData));
+            setItems(decoded.items || []);
+            setPeople(decoded.people || []);
+            setClaims({});
+            setClaimQuantities({});
+            setTax(decoded.tax || 0);
+            setTip(decoded.tip || 0);
+            setTipType(decoded.tipType || 'percent');
+            setStep('split');
+            setIsClaimMode(true);
+            return;
+          } catch (e) {
+            console.log('Invalid claim data');
+          }
+        }
+        
+        // Check for shared results view
+        if (shareData) {
+          try {
+            const decoded = JSON.parse(atob(shareData));
+            setItems(decoded.items || []);
+            setPeople(decoded.people || []);
+            setClaims(decoded.claims || {});
+            setClaimQuantities(decoded.claimQuantities || {});
+            setTax(decoded.tax || 0);
+            setTip(decoded.tip || 0);
+            setTipType(decoded.tipType || 'percent');
+            setStep('results');
+            setIsSharedView(true);
+            return;
+          } catch (e) {
+            console.log('Invalid share data');
+          }
+        }
+        
         if (sid) {
           setSessionId(sid);
           loadSession(sid);
@@ -640,6 +881,178 @@
         alert('Data copied! Go to Google Sheets, create a new sheet, and paste (Ctrl/Cmd+V) to import the data.');
       };
 
+      const generateShareLink = () => {
+        const shareData = {
+          items,
+          people,
+          claims,
+          claimQuantities,
+          tax,
+          tip,
+          tipType
+        };
+        const encoded = btoa(JSON.stringify(shareData));
+        const baseUrl = window.location.origin + window.location.pathname;
+        return `${baseUrl}?share=${encoded}`;
+      };
+
+      const shareResults = async () => {
+        const shareUrl = generateShareLink();
+        
+        // Try native share API first (works great on mobile)
+        if (navigator.share) {
+          try {
+            await navigator.share({
+              title: 'Receipt Split Results',
+              text: `Here's what everyone owes! Total: $${grandTotal.toFixed(2)}`,
+              url: shareUrl
+            });
+            return;
+          } catch (e) {
+            // User cancelled or share failed, fall through to clipboard
+          }
+        }
+        
+        // Fallback to clipboard
+        try {
+          await navigator.clipboard.writeText(shareUrl);
+          alert('Share link copied to clipboard!');
+        } catch (e) {
+          // Final fallback - show the URL
+          prompt('Copy this link to share:', shareUrl);
+        }
+      };
+
+      const startNewSplit = () => {
+        // Clear URL and start fresh
+        window.history.replaceState({}, '', window.location.pathname);
+        setIsSharedView(false);
+        setIsClaimMode(false);
+        setItems([]);
+        setPeople([]);
+        setClaims({});
+        setClaimQuantities({});
+        setTax(0);
+        setTip(0);
+        setTipType('percent');
+        setStep('scan');
+        const newId = 'session_' + Date.now();
+        setSessionId(newId);
+      };
+
+      // Generate a link for friends to claim their items
+      const generateClaimLink = () => {
+        const claimData = {
+          items,
+          people,
+          tax,
+          tip,
+          tipType
+        };
+        const encoded = btoa(JSON.stringify(claimData));
+        const baseUrl = window.location.origin + window.location.pathname;
+        return `${baseUrl}?claim=${encoded}`;
+      };
+
+      // Share claim link with friends
+      const shareClaimLink = async () => {
+        const claimUrl = generateClaimLink();
+        
+        if (navigator.share) {
+          try {
+            await navigator.share({
+              title: 'Claim Your Items!',
+              text: 'Select your name and claim the items you ordered:',
+              url: claimUrl
+            });
+            return;
+          } catch (e) {
+            // Fall through to clipboard
+          }
+        }
+        
+        try {
+          await navigator.clipboard.writeText(claimUrl);
+          alert('Claim link copied! Send this to your friends so they can claim their items.');
+        } catch (e) {
+          prompt('Copy this link and send to friends:', claimUrl);
+        }
+      };
+
+      // Generate claim code for friend to send back
+      const generateMyClaimsCode = () => {
+        if (!selectedPerson) {
+          alert('Please select your name first!');
+          return;
+        }
+        const myClaims = {
+          person: selectedPerson,
+          claims: claims[selectedPerson] || [],
+          quantities: claimQuantities[selectedPerson] || {}
+        };
+        return btoa(JSON.stringify(myClaims));
+      };
+
+      // Friend submits their claims
+      const submitMyClaims = async () => {
+        const code = generateMyClaimsCode();
+        if (!code) return;
+        
+        const text = `My claims for the receipt: ${code}`;
+        
+        if (navigator.share) {
+          try {
+            await navigator.share({
+              title: `${selectedPerson}'s Claims`,
+              text: text
+            });
+            return;
+          } catch (e) {
+            // Fall through
+          }
+        }
+        
+        try {
+          await navigator.clipboard.writeText(code);
+          alert(`Your claims have been copied! Send this code to the person who shared the receipt:\\n\\nCode: ${code.substring(0, 20)}...`);
+        } catch (e) {
+          prompt('Copy this code and send it back:', code);
+        }
+      };
+
+      // Host imports friend's claims
+      const importFriendClaims = () => {
+        if (!importCode.trim()) {
+          alert('Please paste the claim code');
+          return;
+        }
+        
+        try {
+          const decoded = JSON.parse(atob(importCode.trim()));
+          const { person, claims: friendClaims, quantities } = decoded;
+          
+          if (!person || !people.includes(person)) {
+            alert('Invalid claim code - person not found in this receipt');
+            return;
+          }
+          
+          // Merge friend's claims
+          const newClaims = { ...claims };
+          newClaims[person] = friendClaims || [];
+          setClaims(newClaims);
+          
+          const newQuantities = { ...claimQuantities };
+          newQuantities[person] = quantities || {};
+          setClaimQuantities(newQuantities);
+          
+          setImportCode('');
+          setShowImportModal(false);
+          alert(`Successfully imported ${person}'s claims!`);
+        } catch (e) {
+          alert('Invalid claim code. Make sure you copied the entire code.');
+        }
+      };
+
       useEffect(() => {
         lucide.createIcons();
       });
@@ -661,6 +1074,26 @@
                   <Icon icon={DollarSign} className="w-16 h-16 mx-auto text-indigo-600 mb-4" />
                   <h2 className="text-2xl font-bold mb-4">Create Your Receipt</h2>
                   <p className="text-gray-600 mb-6">Scan a receipt or enter items manually</p>
+                  
+                  {/* Join Room Button */}
+                  <div className="mb-6">
+                    <button
+                      onClick={() => setShowJoinModal(true)}
+                      className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition font-medium"
+                    >
+                      <Icon icon={Users} className="w-5 h-5" />
+                      Join a Friend's Room
+                    </button>
+                  </div>
+                  
+                  <div className="relative mb-6">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-gray-300"></div>
+                    </div>
+                    <div className="relative flex justify-center">
+                      <span className="px-4 bg-white text-gray-500 text-sm">or create your own</span>
+                    </div>
+                  </div>
                   
                   {/* API Key Input */}
                   <div className="mb-6 text-left max-w-md mx-auto">
@@ -924,12 +1357,56 @@
 
             {step === 'split' && (
               <div className="bg-white rounded-2xl shadow-xl p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-2xl font-bold">Claim Your Items</h2>
-                  <button onClick={shareLink} className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 flex items-center gap-2">
-                    <Icon icon={Share2} className="w-4 h-4" /> Share Link
-                  </button>
+                {/* Room Code Banner */}
+                {isConnected && roomCode && (
+                  <div className="mb-4 p-4 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-lg text-white">
+                    <div className="flex justify-between items-center flex-wrap gap-2">
+                      <div>
+                        <div className="text-sm opacity-90">Room Code</div>
+                        <div className="text-3xl font-bold tracking-wider">{roomCode}</div>
+                      </div>
+                      <button
+                        onClick={shareRoomLink}
+                        className="bg-white text-indigo-600 px-4 py-2 rounded-lg hover:bg-indigo-50 flex items-center gap-2 font-medium"
+                      >
+                        <Icon icon={Share2} className="w-4 h-4" /> Invite Friends
+                      </button>
+                    </div>
+                    <div className="text-xs mt-2 opacity-75">
+                      Friends can join at {window.location.host} with this code
+                    </div>
+                  </div>
+                )}
+
+                {/* Create Room Button (if not in a room yet) */}
+                {!isConnected && !isClaimMode && (
+                  <div className="mb-4 p-4 bg-blue-50 border-2 border-dashed border-blue-300 rounded-lg">
+                    <div className="flex justify-between items-center flex-wrap gap-2">
+                      <div className="text-blue-800">
+                        <div className="font-medium">Want friends to claim their own items?</div>
+                        <div className="text-sm opacity-75">Create a room and share the code</div>
+                      </div>
+                      <button
+                        onClick={createRoom}
+                        className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
+                      >
+                        <Icon icon={Users} className="w-4 h-4" /> Create Room
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+                  <h2 className="text-2xl font-bold">
+                    {isClaimMode ? `${selectedPerson || 'Select Your Name'} - Claim Items` : 'Claim Your Items'}
+                  </h2>
                 </div>
+
+                {isClaimMode && (
+                  <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-green-800 text-sm">
+                    <strong>Welcome!</strong> Select your name below, check off the items you ordered, then click "Submit My Claims" when done.
+                  </div>
+                )}
 
                 <div className="bg-blue-50 p-4 rounded-lg mb-4">
                   <div className="text-sm space-y-1">
@@ -1083,41 +1560,148 @@
                   </div>
                 )}
 
-                <button
-                  onClick={calculateResults}
-                  className="w-full mt-6 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition"
-                >
-                  Calculate Split
-                </button>
+                {isClaimMode ? (
+                  <>
+                    <button
+                      onClick={submitMyClaims}
+                      disabled={!selectedPerson || !(claims[selectedPerson]?.length > 0)}
+                      className="w-full mt-6 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                      Submit My Claims
+                    </button>
+                    <button
+                      onClick={startNewSplit}
+                      className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
+                    >
+                      Start My Own Split
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={calculateResults}
+                      className="w-full mt-6 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition"
+                    >
+                      Calculate Split
+                    </button>
+                    <button
+                      onClick={() => setStep('review')}
+                      className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
+                    >
+                      Back to Bill and People Entry
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
-                <button
-                  onClick={() => setStep('review')}
-                  className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
-                >
-                  Back to Bill and People Entry
-                </button>
+            {/* Import Claims Modal */}
+            {showImportModal && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                <div className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full">
+                  <h3 className="text-xl font-bold mb-4">Import Friend's Claims</h3>
+                  <p className="text-gray-600 text-sm mb-4">
+                    Paste the claim code your friend sent you:
+                  </p>
+                  <textarea
+                    value={importCode}
+                    onChange={(e) => setImportCode(e.target.value)}
+                    placeholder="Paste claim code here..."
+                    className="w-full px-3 py-2 border rounded-lg mb-4 h-24 font-mono text-sm"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setShowImportModal(false); setImportCode(''); }}
+                      className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={importFriendClaims}
+                      className="flex-1 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+                    >
+                      Import
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Join Room Modal */}
+            {showJoinModal && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                <div className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full">
+                  <h3 className="text-xl font-bold mb-4">Join a Room</h3>
+                  <p className="text-gray-600 text-sm mb-4">
+                    Enter the 5-letter room code shared by your friend:
+                  </p>
+                  <input
+                    type="text"
+                    value={joinCode}
+                    onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setRoomError(''); }}
+                    placeholder="e.g. ABC12"
+                    className="w-full px-4 py-3 border-2 rounded-lg mb-2 text-center text-2xl font-bold tracking-widest uppercase"
+                    maxLength={5}
+                  />
+                  {roomError && (
+                    <div className="text-red-600 text-sm mb-2">{roomError}</div>
+                  )}
+                  <div className="flex gap-2 mt-4">
+                    <button
+                      onClick={() => { setShowJoinModal(false); setJoinCode(''); setRoomError(''); }}
+                      className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => joinRoom(joinCode)}
+                      disabled={joinCode.length < 5}
+                      className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                      Join Room
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
             {step === 'results' && (
               <div className="bg-white rounded-2xl shadow-xl p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-2xl font-bold">Split Results</h2>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={exportToCSV}
-                      className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
-                    >
-                      <Icon icon={Download} className="w-4 h-4" /> CSV
-                    </button>
-                    <button
-                      onClick={exportToGoogleSheets}
-                      className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
-                    >
-                      <Icon icon={FileSpreadsheet} className="w-4 h-4" /> Sheets
-                    </button>
+                  <h2 className="text-2xl font-bold">
+                    {isSharedView ? 'Shared Split Results' : 'Split Results'}
+                  </h2>
+                  <div className="flex gap-2 flex-wrap justify-end">
+                    {!isSharedView && (
+                      <>
+                        <button
+                          onClick={shareResults}
+                          className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 flex items-center gap-2"
+                        >
+                          <Icon icon={Share2} className="w-4 h-4" /> Share
+                        </button>
+                        <button
+                          onClick={exportToCSV}
+                          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
+                        >
+                          <Icon icon={Download} className="w-4 h-4" /> CSV
+                        </button>
+                        <button
+                          onClick={exportToGoogleSheets}
+                          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
+                        >
+                          <Icon icon={FileSpreadsheet} className="w-4 h-4" /> Sheets
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
+                
+                {isSharedView && (
+                  <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-indigo-700 text-sm">
+                    This is a shared view of a receipt split. Start your own split below!
+                  </div>
+                )}
                 
                 <div className="space-y-3 mb-6">
                   {people.map(person => {
@@ -1216,12 +1800,21 @@
                   </div>
                 </div>
 
-                <button
-                  onClick={() => setStep('split')}
-                  className="w-full mt-4 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
-                >
-                  Back to Edit Claims
-                </button>
+                {isSharedView ? (
+                  <button
+                    onClick={startNewSplit}
+                    className="w-full mt-4 bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition"
+                  >
+                    Start My Own Split
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setStep('split')}
+                    className="w-full mt-4 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
+                  >
+                    Back to Edit Claims
+                  </button>
+                )}
               </div>
             )}
           </div>

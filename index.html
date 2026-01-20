@@ -1009,73 +1009,6 @@
         alert('Link copied! Share this with your friends so they can claim their items.');
       };
 
-      const exportToCSV = () => {
-        let csv = 'Name,Item Total,Tax,Tip,Total Owed\\n';
-        
-        people.forEach(person => {
-          const personSubtotal = getPersonSubtotal(person);
-          const personProportion = subtotal > 0 ? personSubtotal / subtotal : 1 / people.length;
-          const personTax = tax * personProportion;
-          const personTip = tipAmount * personProportion;
-          const total = getPersonTotal(person);
-          
-          csv += `${person},${personSubtotal.toFixed(2)},${personTax.toFixed(2)},${personTip.toFixed(2)},${total.toFixed(2)}\\n`;
-        });
-        
-        csv += '\\nItem Breakdown\\n';
-        csv += 'Person,Item,Price per Person\\n';
-        
-        people.forEach(person => {
-          const personClaims = claims[person] || [];
-          personClaims.forEach(itemId => {
-            const item = items.find(i => i.id === itemId);
-            const claimers = Object.values(claims).filter(c => c.includes(itemId)).length;
-            const itemCost = (item.price * item.qty) / claimers;
-            csv += `${person},${item.name},${itemCost.toFixed(2)}\\n`;
-          });
-        });
-        
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'receipt-split.csv';
-        a.click();
-      };
-
-      const exportToGoogleSheets = () => {
-        let sheetsData = 'Summary\\n\\n';
-        sheetsData += 'Name\\tItem Total\\tTax\\tTip\\tTotal Owed\\n';
-        
-        people.forEach(person => {
-          const personSubtotal = getPersonSubtotal(person);
-          const personProportion = subtotal > 0 ? personSubtotal / subtotal : 1 / people.length;
-          const personTax = tax * personProportion;
-          const personTip = tipAmount * personProportion;
-          const total = getPersonTotal(person);
-          
-          sheetsData += `${person}\\t${personSubtotal.toFixed(2)}\\t${personTax.toFixed(2)}\\t${personTip.toFixed(2)}\\t${total.toFixed(2)}\\n`;
-        });
-        
-        sheetsData += '\\n\\nItem Breakdown\\n\\n';
-        sheetsData += 'Person\\tItem\\tQty Claimed\\tPrice\\n';
-        
-        people.forEach(person => {
-          const personClaims = claims[person] || [];
-          personClaims.forEach(itemId => {
-            const item = items.find(i => i.id === itemId);
-            const personQty = getClaimQuantity(person, itemId);
-            const totalClaimedQty = getTotalClaimedQuantity(itemId);
-            const itemSubtotal = item.price * item.qty;
-            const itemCost = (itemSubtotal * personQty) / totalClaimedQty;
-            sheetsData += `${person}\\t${item.name}\\t${formatQty(personQty)}\\t${itemCost.toFixed(2)}\\n`;
-          });
-        });
-        
-        navigator.clipboard.writeText(sheetsData);
-        alert('Data copied! Go to Google Sheets, create a new sheet, and paste (Ctrl/Cmd+V) to import the data.');
-      };
-
       const generateShareLink = () => {
         const shareData = {
           items,
@@ -1872,30 +1805,6 @@
                   <h2 className="text-2xl font-bold">
                     {isSharedView ? 'Shared Split Results' : 'Split Results'}
                   </h2>
-                  <div className="flex gap-2 flex-wrap justify-end">
-                    {!isSharedView && (
-                      <>
-                        <button
-                          onClick={shareResults}
-                          className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 flex items-center gap-2"
-                        >
-                          <Icon icon={Share2} className="w-4 h-4" /> Share
-                        </button>
-                        <button
-                          onClick={exportToCSV}
-                          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
-                        >
-                          <Icon icon={Download} className="w-4 h-4" /> CSV
-                        </button>
-                        <button
-                          onClick={exportToGoogleSheets}
-                          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
-                        >
-                          <Icon icon={FileSpreadsheet} className="w-4 h-4" /> Sheets
-                        </button>
-                      </>
-                    )}
-                  </div>
                 </div>
                 
                 {isSharedView && (
@@ -2009,12 +1918,20 @@
                     Start My Own Split
                   </button>
                 ) : (
-                  <button
-                    onClick={() => setStep('split')}
-                    className="w-full mt-4 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
-                  >
-                    Back to Edit Claims
-                  </button>
+                  <>
+                    <button
+                      onClick={shareResults}
+                      className="w-full mt-4 bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2"
+                    >
+                      <Icon icon={Share2} className="w-5 h-5" /> Share Results
+                    </button>
+                    <button
+                      onClick={() => setStep('split')}
+                      className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
+                    >
+                      Back to Edit Claims
+                    </button>
+                  </>
                 )}
               </div>
             )}

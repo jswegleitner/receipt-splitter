@@ -157,25 +157,34 @@
           const code = generateRoomCode();
           const roomRef = database.ref(`rooms/${code}`);
           
-          // Sanitize claims - remove empty arrays, ensure non-empty
+          // Helper to sanitize keys for Firebase (replace periods with underscores)
+          const sanitizeKey = (key) => String(key).replace(/\./g, '_');
+          
+          // Sanitize claims - remove empty arrays, ensure non-empty, fix keys
           const sanitizedClaims = {};
           for (const [person, itemIds] of Object.entries(claims)) {
             if (Array.isArray(itemIds) && itemIds.length > 0) {
-              sanitizedClaims[person] = itemIds;
+              // Sanitize item IDs in the array
+              sanitizedClaims[person] = itemIds.map(id => sanitizeKey(id));
             }
           }
           
-          // Sanitize claimQuantities - remove empty objects
+          // Sanitize claimQuantities - remove empty objects, fix keys
           const sanitizedClaimQtys = {};
           for (const [person, qtys] of Object.entries(claimQuantities)) {
             if (qtys && typeof qtys === 'object' && Object.keys(qtys).length > 0) {
-              sanitizedClaimQtys[person] = qtys;
+              // Sanitize item ID keys
+              const sanitizedQtys = {};
+              for (const [itemId, qty] of Object.entries(qtys)) {
+                sanitizedQtys[sanitizeKey(itemId)] = qty;
+              }
+              sanitizedClaimQtys[person] = sanitizedQtys;
             }
           }
           
           // Sanitize items - ensure no undefined values
           const sanitizedItems = items.map(item => ({
-            id: item.id || Date.now().toString(),
+            id: item.id ? String(item.id).replace(/\./g, '_') : `${Date.now()}_${Math.floor(Math.random() * 10000)}`,
             name: item.name || '',
             price: parseFloat(item.price) || 0,
             qty: parseFloat(item.qty) || 1
@@ -629,9 +638,9 @@
         console.log('Detected tax so far:', detectedTax);
         
         // Add complete items first
-        completeItems.forEach(item => {
+        completeItems.forEach((item, idx) => {
           parsedItems.push({
-            id: Date.now() + Math.random(),
+            id: `${Date.now()}_${idx}_${Math.floor(Math.random() * 10000)}`,
             name: item.name,
             price: item.totalPrice / item.qty,
             qty: item.qty
@@ -680,7 +689,7 @@
           const price = pricesToMatch[i];
           
           parsedItems.push({
-            id: Date.now() + Math.random(),
+            id: `${Date.now()}_${i}_${Math.floor(Math.random() * 10000)}`,
             name: item.name,
             price: price / item.qty,
             qty: item.qty
@@ -775,7 +784,7 @@
 
       const addItem = () => {
         const newItem = {
-          id: Date.now(),
+          id: `${Date.now()}_${Math.floor(Math.random() * 10000)}`,
           name: '',
           price: 0,
           qty: 1

@@ -173,18 +173,28 @@
             }
           }
           
+          // Sanitize items - ensure no undefined values
+          const sanitizedItems = items.map(item => ({
+            id: item.id || Date.now().toString(),
+            name: item.name || '',
+            price: parseFloat(item.price) || 0,
+            qty: parseFloat(item.qty) || 1
+          }));
+          
           // Build room data with proper placeholders for Firebase
           const roomData = {
-            items: items.length > 0 ? items : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }],
+            items: sanitizedItems.length > 0 ? sanitizedItems : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }],
             people: people.length > 0 ? people : ['__placeholder__'],
             claims: Object.keys(sanitizedClaims).length > 0 ? sanitizedClaims : { __placeholder__: ['__placeholder__'] },
             claimQuantities: Object.keys(sanitizedClaimQtys).length > 0 ? sanitizedClaimQtys : { __placeholder__: { __placeholder__: 0 } },
-            tax: tax || 0,
-            tip: tip || 0,
+            tax: parseFloat(tax) || 0,
+            tip: parseFloat(tip) || 0,
             tipType: tipType || 'percent',
             createdAt: Date.now(),
             hostId: sessionId || 'unknown'
           };
+          
+          console.log('Creating room with data:', JSON.stringify(roomData, null, 2));
           
           await roomRef.set(roomData);
           setRoomCode(code);
@@ -197,7 +207,8 @@
           return code;
         } catch (error) {
           console.error('Error creating room:', error);
-          alert('Error creating room. Please try again.');
+          console.error('Error details:', error.message, error.code);
+          alert(`Error creating room: ${error.message || 'Please try again.'}`);
           return null;
         }
       };

@@ -712,17 +712,35 @@
           price: 0,
           qty: 1
         };
-        setItems([...items, newItem]);
+        const newItems = [...items, newItem];
+        setItems(newItems);
+        
+        // Host syncs item changes to room
+        if (isHost && isConnected) {
+          syncToRoom('items', newItems);
+        }
       };
 
       const updateItem = (id, field, value) => {
-        setItems(items.map(item => 
+        const newItems = items.map(item => 
           item.id === id ? { ...item, [field]: value } : item
-        ));
+        );
+        setItems(newItems);
+        
+        // Host syncs item changes to room
+        if (isHost && isConnected) {
+          syncToRoom('items', newItems);
+        }
       };
 
       const removeItem = (id) => {
-        setItems(items.filter(item => item.id !== id));
+        const newItems = items.filter(item => item.id !== id);
+        setItems(newItems);
+        
+        // Host syncs item changes to room
+        if (isHost && isConnected) {
+          syncToRoom('items', newItems);
+        }
       };
 
       const addPerson = () => {
@@ -733,11 +751,17 @@
             setSelectedPerson(newPerson.trim());
           }
           setNewPerson('');
+          
+          // Host syncs people changes to room
+          if (isHost && isConnected) {
+            syncToRoom('people', newPeople);
+          }
         }
       };
 
       const removePerson = (person) => {
-        setPeople(people.filter(p => p !== person));
+        const newPeople = people.filter(p => p !== person);
+        setPeople(newPeople);
         const newClaims = { ...claims };
         delete newClaims[person];
         setClaims(newClaims);
@@ -746,6 +770,13 @@
         setClaimQuantities(newClaimQuantities);
         if (selectedPerson === person && people.length > 1) {
           setSelectedPerson(people.find(p => p !== person) || '');
+        }
+        
+        // Host syncs people/claims changes to room
+        if (isHost && isConnected) {
+          syncToRoom('people', newPeople);
+          syncToRoom('claims', newClaims);
+          syncToRoom('claimQuantities', newClaimQuantities);
         }
       };
 
@@ -788,6 +819,30 @@
         
         // Sync to Firebase immediately (but debounce rapid changes)
         syncToRoom('claimQuantities', newClaimQuantities);
+      };
+
+      // Host-only functions to update tax/tip with sync
+      const updateTax = (value) => {
+        const newTax = parseFloat(value) || 0;
+        setTax(newTax);
+        if (isHost && isConnected) {
+          syncToRoom('tax', newTax);
+        }
+      };
+
+      const updateTip = (value) => {
+        const newTip = parseFloat(value) || 0;
+        setTip(newTip);
+        if (isHost && isConnected) {
+          syncToRoom('tip', newTip);
+        }
+      };
+
+      const updateTipType = (value) => {
+        setTipType(value);
+        if (isHost && isConnected) {
+          syncToRoom('tipType', value);
+        }
       };
 
       const getClaimQuantity = (person, itemId) => {
@@ -1322,7 +1377,7 @@
                         <input
                           type="number"
                           value={tax || ''}
-                          onChange={(e) => setTax(parseFloat(e.target.value) || 0)}
+                          onChange={(e) => updateTax(e.target.value)}
                           placeholder="0.00"
                           className="w-full px-3 py-2 border rounded"
                           step="0.01"
@@ -1334,7 +1389,7 @@
                         <div className="flex gap-2">
                           <select
                             value={tipType}
-                            onChange={(e) => setTipType(e.target.value)}
+                            onChange={(e) => updateTipType(e.target.value)}
                             className="px-3 py-2 border rounded"
                           >
                             <option value="percent">%</option>
@@ -1343,7 +1398,7 @@
                           <input
                             type="number"
                             value={tip || ''}
-                            onChange={(e) => setTip(parseFloat(e.target.value) || 0)}
+                            onChange={(e) => updateTip(e.target.value)}
                             placeholder={tipType === 'percent' ? '15' : '0.00'}
                             className="flex-1 px-3 py-2 border rounded"
                             step={tipType === 'percent' ? '1' : '0.01'}
@@ -1650,12 +1705,15 @@
                     >
                       Calculate Split
                     </button>
-                    <button
-                      onClick={() => setStep('review')}
-                      className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
-                    >
-                      Back to Bill and People Entry
-                    </button>
+                    {/* Only show back button if not in a room, or if you're the host */}
+                    {(!isConnected || isHost) && (
+                      <button
+                        onClick={() => setStep('review')}
+                        className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
+                      >
+                        Back to Bill and People Entry
+                      </button>
+                    )}
                   </>
                 )}
               </div>

@@ -254,12 +254,30 @@
         }
       };
 
-      // Sync items to room when they change (but not when receiving from Firebase)
-      useEffect(() => {
-        if (isConnected && roomCode && !isReceivingUpdate.current) {
-          updateRoom({ items, people, claims, claimQuantities, tax, tip, tipType });
+      // Helper to sync specific fields to room
+      const syncToRoom = (field, value) => {
+        if (!roomCode || !isConnected || isReceivingUpdate.current) return;
+        
+        try {
+          const roomRef = database.ref(`rooms/${roomCode}/${field}`);
+          
+          // Sanitize based on field type
+          if (field === 'claims') {
+            const sanitized = Object.keys(value || {}).length > 0 ? value : { __placeholder__: [] };
+            roomRef.set(sanitized);
+          } else if (field === 'claimQuantities') {
+            const sanitized = Object.keys(value || {}).length > 0 ? value : { __placeholder__: {} };
+            roomRef.set(sanitized);
+          } else {
+            roomRef.set(value);
+          }
+          
+          // Also update the timestamp
+          database.ref(`rooms/${roomCode}/updatedAt`).set(Date.now());
+        } catch (error) {
+          console.error(`Error syncing ${field}:`, error);
         }
-      }, [items, people, claims, claimQuantities, tax, tip, tipType]);
+      };
 
       // Clean up old rooms (>7 days) - runs on app load
       const cleanupOldRooms = async () => {
@@ -735,23 +753,26 @@
         const newClaims = { ...claims };
         if (!newClaims[person]) newClaims[person] = [];
         
+        const newClaimQuantities = { ...claimQuantities };
+        
         const idx = newClaims[person].indexOf(itemId);
         if (idx > -1) {
           newClaims[person].splice(idx, 1);
-          const newClaimQuantities = { ...claimQuantities };
           if (newClaimQuantities[person]) {
             delete newClaimQuantities[person][itemId];
           }
-          setClaimQuantities(newClaimQuantities);
         } else {
           newClaims[person].push(itemId);
-          const newClaimQuantities = { ...claimQuantities };
           if (!newClaimQuantities[person]) newClaimQuantities[person] = {};
           newClaimQuantities[person][itemId] = 1;
-          setClaimQuantities(newClaimQuantities);
         }
         
         setClaims(newClaims);
+        setClaimQuantities(newClaimQuantities);
+        
+        // Sync to Firebase immediately
+        syncToRoom('claims', newClaims);
+        syncToRoom('claimQuantities', newClaimQuantities);
       };
 
       const updateClaimQuantity = (person, itemId, quantity, clampMin = false) => {
@@ -764,6 +785,9 @@
         const finalQty = clampMin ? Math.max(0.01, Math.min(parsedQty, maxQty)) : Math.min(parsedQty, maxQty);
         newClaimQuantities[person][itemId] = finalQty;
         setClaimQuantities(newClaimQuantities);
+        
+        // Sync to Firebase immediately (but debounce rapid changes)
+        syncToRoom('claimQuantities', newClaimQuantities);
       };
 
       const getClaimQuantity = (person, itemId) => {
@@ -1423,7 +1447,7 @@
                     <div className="flex justify-between items-center flex-wrap gap-2">
                       <div className="text-blue-800">
                         <div className="font-medium">Want friends to claim their own items?</div>
-                        <div className="text-sm opacity-75">Create a room and share the code</div>
+                        <div className="text-sm opacity-75">Create a room and share the code with friends</div>
                       </div>
                       <button
                         onClick={createRoom}
@@ -1431,6 +1455,9 @@
                       >
                         <Icon icon={Users} className="w-4 h-4" /> Create Room
                       </button>
+                    </div>
+                    <div className="text-xs text-blue-600 mt-2">
+                      💡 Tip: All claims will sync in real-time once room is created
                     </div>
                   </div>
                 )}

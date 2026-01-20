@@ -1,0 +1,10 @@
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Original tsx file (not needed for deployment)
+receipt_splitter.tsx

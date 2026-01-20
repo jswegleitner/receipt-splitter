@@ -126,18 +126,59 @@
         return code;
       };
 
+      // Helper to sanitize data for Firebase (removes empty arrays/objects)
+      const sanitizeForFirebase = (obj) => {
+        if (obj === null || obj === undefined) return null;
+        if (Array.isArray(obj)) {
+          // Firebase doesn't like empty arrays, add placeholder
+          return obj.length > 0 ? obj : ['__placeholder__'];
+        }
+        if (typeof obj === 'object') {
+          const result = {};
+          let hasKeys = false;
+          for (const [key, value] of Object.entries(obj)) {
+            const sanitized = sanitizeForFirebase(value);
+            if (sanitized !== null && sanitized !== undefined) {
+              // Skip empty arrays/objects within nested objects
+              if (Array.isArray(sanitized) && sanitized.length === 0) continue;
+              if (typeof sanitized === 'object' && !Array.isArray(sanitized) && Object.keys(sanitized).length === 0) continue;
+              result[key] = sanitized;
+              hasKeys = true;
+            }
+          }
+          return hasKeys ? result : { __placeholder__: true };
+        }
+        return obj;
+      };
+
       // Create a new room
       const createRoom = async () => {
         try {
           const code = generateRoomCode();
           const roomRef = database.ref(`rooms/${code}`);
           
-          // Sanitize data - Firebase doesn't like empty objects/arrays
+          // Sanitize claims - remove empty arrays, ensure non-empty
+          const sanitizedClaims = {};
+          for (const [person, itemIds] of Object.entries(claims)) {
+            if (Array.isArray(itemIds) && itemIds.length > 0) {
+              sanitizedClaims[person] = itemIds;
+            }
+          }
+          
+          // Sanitize claimQuantities - remove empty objects
+          const sanitizedClaimQtys = {};
+          for (const [person, qtys] of Object.entries(claimQuantities)) {
+            if (qtys && typeof qtys === 'object' && Object.keys(qtys).length > 0) {
+              sanitizedClaimQtys[person] = qtys;
+            }
+          }
+          
+          // Build room data with proper placeholders for Firebase
           const roomData = {
             items: items.length > 0 ? items : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }],
             people: people.length > 0 ? people : ['__placeholder__'],
-            claims: Object.keys(claims).length > 0 ? claims : { __placeholder__: [] },
-            claimQuantities: Object.keys(claimQuantities).length > 0 ? claimQuantities : { __placeholder__: {} },
+            claims: Object.keys(sanitizedClaims).length > 0 ? sanitizedClaims : { __placeholder__: ['__placeholder__'] },
+            claimQuantities: Object.keys(sanitizedClaimQtys).length > 0 ? sanitizedClaimQtys : { __placeholder__: { __placeholder__: 0 } },
             tax: tax || 0,
             tip: tip || 0,
             tipType: tipType || 'percent',
@@ -261,13 +302,29 @@
         try {
           const roomRef = database.ref(`rooms/${roomCode}/${field}`);
           
-          // Sanitize based on field type
+          // Sanitize based on field type - Firebase doesn't like empty arrays/objects
           if (field === 'claims') {
-            const sanitized = Object.keys(value || {}).length > 0 ? value : { __placeholder__: [] };
-            roomRef.set(sanitized);
+            // Filter out empty arrays and ensure non-empty
+            const sanitized = {};
+            for (const [person, itemIds] of Object.entries(value || {})) {
+              if (Array.isArray(itemIds) && itemIds.length > 0) {
+                sanitized[person] = itemIds;
+              }
+            }
+            roomRef.set(Object.keys(sanitized).length > 0 ? sanitized : { __placeholder__: ['__placeholder__'] });
           } else if (field === 'claimQuantities') {
-            const sanitized = Object.keys(value || {}).length > 0 ? value : { __placeholder__: {} };
-            roomRef.set(sanitized);
+            // Filter out empty objects
+            const sanitized = {};
+            for (const [person, qtys] of Object.entries(value || {})) {
+              if (qtys && typeof qtys === 'object' && Object.keys(qtys).length > 0) {
+                sanitized[person] = qtys;
+              }
+            }
+            roomRef.set(Object.keys(sanitized).length > 0 ? sanitized : { __placeholder__: { __placeholder__: 0 } });
+          } else if (field === 'items') {
+            roomRef.set(value.length > 0 ? value : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }]);
+          } else if (field === 'people') {
+            roomRef.set(value.length > 0 ? value : ['__placeholder__']);
           } else {
             roomRef.set(value);
           }

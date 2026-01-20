@@ -128,30 +128,37 @@
 
       // Create a new room
       const createRoom = async () => {
-        const code = generateRoomCode();
-        const roomRef = database.ref(`rooms/${code}`);
-        
-        const roomData = {
-          items,
-          people,
-          claims,
-          claimQuantities,
-          tax,
-          tip,
-          tipType,
-          createdAt: Date.now(),
-          hostId: sessionId
-        };
-        
-        await roomRef.set(roomData);
-        setRoomCode(code);
-        setIsHost(true);
-        setIsConnected(true);
-        
-        // Start listening for changes
-        subscribeToRoom(code);
-        
-        return code;
+        try {
+          const code = generateRoomCode();
+          const roomRef = database.ref(`rooms/${code}`);
+          
+          // Sanitize data - Firebase doesn't like empty objects/arrays
+          const roomData = {
+            items: items.length > 0 ? items : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }],
+            people: people.length > 0 ? people : ['__placeholder__'],
+            claims: Object.keys(claims).length > 0 ? claims : { __placeholder__: [] },
+            claimQuantities: Object.keys(claimQuantities).length > 0 ? claimQuantities : { __placeholder__: {} },
+            tax: tax || 0,
+            tip: tip || 0,
+            tipType: tipType || 'percent',
+            createdAt: Date.now(),
+            hostId: sessionId || 'unknown'
+          };
+          
+          await roomRef.set(roomData);
+          setRoomCode(code);
+          setIsHost(true);
+          setIsConnected(true);
+          
+          // Start listening for changes
+          subscribeToRoom(code);
+          
+          return code;
+        } catch (error) {
+          console.error('Error creating room:', error);
+          alert('Error creating room. Please try again.');
+          return null;
+        }
       };
 
       // Join an existing room
@@ -192,18 +199,32 @@
         const roomRef = database.ref(`rooms/${code}`);
         
         roomRef.on('value', (snapshot) => {
-          if (snapshot.exists()) {
-            isReceivingUpdate.current = true;
-            const data = snapshot.val();
-            setItems(data.items || []);
-            setPeople(data.people || []);
-            setClaims(data.claims || {});
-            setClaimQuantities(data.claimQuantities || {});
-            setTax(data.tax || 0);
-            setTip(data.tip || 0);
-            setTipType(data.tipType || 'percent');
-            // Reset flag after state updates are scheduled
-            setTimeout(() => { isReceivingUpdate.current = false; }, 100);
+          try {
+            if (snapshot.exists()) {
+              isReceivingUpdate.current = true;
+              const data = snapshot.val();
+              
+              // Filter out placeholder data
+              const cleanItems = (data.items || []).filter(i => i.id !== '__placeholder__');
+              const cleanPeople = (data.people || []).filter(p => p !== '__placeholder__');
+              const cleanClaims = { ...data.claims };
+              delete cleanClaims.__placeholder__;
+              const cleanQuantities = { ...data.claimQuantities };
+              delete cleanQuantities.__placeholder__;
+              
+              setItems(cleanItems);
+              setPeople(cleanPeople);
+              setClaims(cleanClaims);
+              setClaimQuantities(cleanQuantities);
+              setTax(data.tax || 0);
+              setTip(data.tip || 0);
+              setTipType(data.tipType || 'percent');
+              // Reset flag after state updates are scheduled
+              setTimeout(() => { isReceivingUpdate.current = false; }, 100);
+            }
+          } catch (error) {
+            console.error('Error receiving room update:', error);
+            isReceivingUpdate.current = false;
           }
         });
       };
@@ -212,11 +233,25 @@
       const updateRoom = (updates) => {
         if (!roomCode || !isConnected) return;
         
-        const roomRef = database.ref(`rooms/${roomCode}`);
-        roomRef.update({
-          ...updates,
-          updatedAt: Date.now()
-        });
+        try {
+          const roomRef = database.ref(`rooms/${roomCode}`);
+          
+          // Sanitize data for Firebase
+          const sanitizedUpdates = {
+            items: updates.items?.length > 0 ? updates.items : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }],
+            people: updates.people?.length > 0 ? updates.people : ['__placeholder__'],
+            claims: Object.keys(updates.claims || {}).length > 0 ? updates.claims : { __placeholder__: [] },
+            claimQuantities: Object.keys(updates.claimQuantities || {}).length > 0 ? updates.claimQuantities : { __placeholder__: {} },
+            tax: updates.tax || 0,
+            tip: updates.tip || 0,
+            tipType: updates.tipType || 'percent',
+            updatedAt: Date.now()
+          };
+          
+          roomRef.update(sanitizedUpdates);
+        } catch (error) {
+          console.error('Error updating room:', error);
+        }
       };
 
       // Sync items to room when they change (but not when receiving from Firebase)

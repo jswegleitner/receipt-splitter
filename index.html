@@ -111,6 +111,7 @@
       const [joinCode, setJoinCode] = useState('');
       const [roomError, setRoomError] = useState('');
       const [isConnected, setIsConnected] = useState(false);
+      const isReceivingUpdate = React.useRef(false);
       
       // Replace with your Google Cloud Vision API key
       const GOOGLE_VISION_API_KEY = localStorage.getItem('google_vision_api_key') || '';
@@ -192,6 +193,7 @@
         
         roomRef.on('value', (snapshot) => {
           if (snapshot.exists()) {
+            isReceivingUpdate.current = true;
             const data = snapshot.val();
             setItems(data.items || []);
             setPeople(data.people || []);
@@ -200,6 +202,8 @@
             setTax(data.tax || 0);
             setTip(data.tip || 0);
             setTipType(data.tipType || 'percent');
+            // Reset flag after state updates are scheduled
+            setTimeout(() => { isReceivingUpdate.current = false; }, 100);
           }
         });
       };
@@ -215,9 +219,9 @@
         });
       };
 
-      // Sync items to room when they change
+      // Sync items to room when they change (but not when receiving from Firebase)
       useEffect(() => {
-        if (isConnected && roomCode) {
+        if (isConnected && roomCode && !isReceivingUpdate.current) {
           updateRoom({ items, people, claims, claimQuantities, tax, tip, tipType });
         }
       }, [items, people, claims, claimQuantities, tax, tip, tipType]);

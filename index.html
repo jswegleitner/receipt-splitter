@@ -112,6 +112,7 @@
       const [roomError, setRoomError] = useState('');
       const [isConnected, setIsConnected] = useState(false);
       const isReceivingUpdate = React.useRef(false);
+      const personInputRef = React.useRef(null);
       
       // Replace with your Google Cloud Vision API key
       const GOOGLE_VISION_API_KEY = localStorage.getItem('google_vision_api_key') || '';
@@ -833,6 +834,11 @@
           if (isHost && isConnected) {
             syncToRoom('people', newPeople);
           }
+          
+          // Keep focus on input to keep keyboard open
+          setTimeout(() => {
+            personInputRef.current?.focus();
+          }, 0);
         }
       };
 
@@ -1448,6 +1454,7 @@
                   <h3 className="text-lg font-semibold mb-2">Add People</h3>
                   <div className="flex gap-2 mb-3">
                     <input
+                      ref={personInputRef}
                       type="text"
                       value={newPerson}
                       onChange={(e) => setNewPerson(e.target.value)}
@@ -1455,7 +1462,11 @@
                       placeholder="Name"
                       className="flex-1 px-3 py-2 border rounded"
                     />
-                    <button onClick={addPerson} className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">
+                    <button 
+                      onClick={addPerson} 
+                      onMouseDown={(e) => e.preventDefault()}
+                      className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
+                    >
                       Add
                     </button>
                   </div>

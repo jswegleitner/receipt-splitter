@@ -1250,7 +1250,6 @@
                       <input
                         type="file"
                         accept="image/*"
-                        capture="environment"
                         onChange={handleImageUpload}
                         disabled={isProcessing}
                         className="hidden"
@@ -1539,31 +1538,6 @@
                   </div>
                 )}
 
-                <div className="bg-blue-50 p-4 rounded-lg mb-4">
-                  <div className="text-sm space-y-1">
-                    <div className="flex justify-between">
-                      <span>Subtotal:</span>
-                      <span className="font-medium">${subtotal.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Tax:</span>
-                      <span className="font-medium">${tax.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between pb-1 border-b">
-                      <span>Subtotal + Tax:</span>
-                      <span className="font-medium">${subtotalPlusTax.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between pt-1">
-                      <span>Tip {tipType === 'percent' ? `(${tip}%)` : ''}:</span>
-                      <span className="font-medium">${tipAmount.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between font-bold text-base border-t pt-1 mt-1">
-                      <span>Total:</span>
-                      <span>${totalBill.toFixed(2)}</span>
-                    </div>
-                  </div>
-                </div>
-
                 <div className="mb-6">
                   <label className="block text-sm font-medium mb-2">Select Person:</label>
                   <select
@@ -1690,6 +1664,32 @@
                     </div>
                   </div>
                 )}
+
+                {/* Subtotal/Tax/Tip Summary */}
+                <div className="bg-blue-50 p-4 rounded-lg mt-6">
+                  <div className="text-sm space-y-1">
+                    <div className="flex justify-between">
+                      <span>Subtotal:</span>
+                      <span className="font-medium">${subtotal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Tax:</span>
+                      <span className="font-medium">${tax.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between pb-1 border-b">
+                      <span>Subtotal + Tax:</span>
+                      <span className="font-medium">${subtotalPlusTax.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between pt-1">
+                      <span>Tip {tipType === 'percent' ? `(${tip}%)` : ''}:</span>
+                      <span className="font-medium">${tipAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-base border-t pt-1 mt-1">
+                      <span>Total:</span>
+                      <span>${totalBill.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
 
                 {isClaimMode ? (
                   <>

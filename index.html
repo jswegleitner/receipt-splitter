@@ -514,18 +514,39 @@
         
         const parsedItems = [];
         let detectedTax = 0;
+        let detectedTip = 0;
         
         // Skip patterns for header/footer lines
         const skipLine = (line) => {
           // Skip very short lines (likely fragments), but allow "Tax"
           if (line.length < 3) return true;
           
-          return /^(subtotal|total$|change|cash|credit card|debit|visa\b|mastercard|amex|thank|welcome|order:|receipt|store|address|phone|tel|www\.|http|server:|check\s*#|table\s|ordered:|powered|medium$|ranch$|on the side|how was|stars?|feedback|contact|tip$|authorization|approval|payment|card reader|transaction|incremental|o'brien|irish pub|irish\s|pub\s|restaurant|wilshire|santa monica|ca\s*\d{5}|\d{4}D$|xxxx|^\d+:\d+\s*(am|pm)$|^\d+\/\d+\/\d+|messages|toasttab|boulevard|the restaurant|contact info|previously provided|sale$|approved$|bbpos|jonathan|^\d{2}:\d{2}$|en's$)/i.test(line);
+          return /^(subtotal|total$|change|cash|credit card|debit|visa\b|mastercard|amex|thank|welcome|order:|receipt|store|address|phone|tel|www\.|http|server:|check\s*#|table\s|ordered:|powered|medium$|ranch$|on the side|how was|stars?|feedback|contact|tip$|authorization|approval|payment|card reader|transaction|incremental|o'brien|irish pub|irish\s|pub\s|restaurant|wilshire|santa monica|ca\s*\d{5}|\d{4}D$|xxxx|^\d+:\d+\s*(am|pm)$|^\d+\/\d+\/\d+|messages|toasttab|boulevard|the restaurant|contact info|previously provided|sale$|approved$|bbpos|jonathan|^\d{2}:\d{2}$|en's$|purveyor|download|app|get it on|application|label|reader|cardholder|contactless|time$|type$|code$|id$)/i.test(line);
         };
         
         // Check if a line looks like an address (starts with number + street name)
         const isAddressLine = (line) => {
           return /^\d+\s+\w+\s+(boulevard|blvd|street|st|avenue|ave|road|rd|drive|dr|lane|ln|way|court|ct)/i.test(line);
+        };
+        
+        // Check if a line looks like an item name (not a price, not a skip pattern, and has reasonable content)
+        const isItemNameLine = (line) => {
+          // Skip if it's a price
+          if (/^\$?\d+\.\d{2}$/.test(line)) return false;
+          // Skip if it matches skip patterns
+          if (skipLine(line)) return false;
+          // Skip if it's an address
+          if (isAddressLine(line)) return false;
+          // Skip state/zip patterns like "Los Angeles, CA 90291"
+          if (/,\s*[A-Z]{2}\s*\d{5}/.test(line)) return false;
+          // Skip very long lines (likely descriptions or legal text)
+          if (line.length > 60) return false;
+          // Skip lines that look like restaurant/store names (usually capitalized or have special chars)
+          if (/^[A-Z][a-zäöüß]+küche$/i.test(line)) return false; // e.g., Wurstküche
+          // Skip location/city names
+          if (/^(los angeles|new york|chicago|san francisco|seattle|denver|austin|portland|miami|boston)/i.test(line)) return false;
+          // Should have at least 3 characters and contain letters
+          return line.length >= 3 && /[a-zA-Z]/.test(line);
         };
         
         // Collect all items (lines starting with quantity + name, no price)
@@ -534,6 +555,8 @@
         const priceLines = [];
         // Track items that already have prices on same line
         const completeItems = [];
+        // Track potential item names followed by prices on next line
+        const itemNamesNoQty = [];
         
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
@@ -545,6 +568,12 @@
           
           if (isAddressLine(line)) {
             console.log(`Skipping (address): "${line}"`);
+            continue;
+          }
+          
+          // Skip city/state/zip lines
+          if (/,\s*[A-Z]{2}\s*\d{5}/.test(line)) {
+            console.log(`Skipping (city/state/zip): "${line}"`);
             continue;
           }
           
@@ -574,11 +603,26 @@
             continue;
           }
           
+          // Check for tip label with price on next line
+          if (/^tip$/i.test(line)) {
+            if (i + 1 < lines.length) {
+              const nextLine = lines[i + 1];
+              const immediatePrice = nextLine.match(/^\$?(\d+\.\d{2})$/);
+              if (immediatePrice) {
+                detectedTip = parseFloat(immediatePrice[1]);
+                console.log(`Found Tip with price on next line: $${detectedTip}`);
+                i++; // Skip the price line
+                continue;
+              }
+            }
+            continue;
+          }
+          
           // Check if line is just a price
           const priceOnly = line.match(/^\$?(\d+\.\d{2})$/);
           if (priceOnly) {
             const price = parseFloat(priceOnly[1]);
-            priceLines.push(price);
+            priceLines.push({ price, index: i });
             console.log(`Found price: $${price}`);
             continue;
           }
@@ -620,7 +664,7 @@
             if (qty >= 1 && qty < 100 && name.length >= 2 && !/^(sub)?total$/i.test(name)) {
               // Also skip if name looks like an address component
               if (!/boulevard|blvd|street|st|avenue|ave|road|rd/i.test(name)) {
-                itemLines.push({ qty, name });
+                itemLines.push({ qty, name, index: i });
                 console.log(`Found item (no price): ${qty}x ${name}`);
               } else {
                 console.log(`Skipping (looks like address): ${qty} ${name}`);
@@ -630,13 +674,44 @@
             }
             continue;
           }
+          
+          // NEW: Check if this line looks like an item name (text followed by price on next line)
+          // This handles receipts where items and prices are on separate lines
+          if (isItemNameLine(line)) {
+            // Peek at next line to see if it's a price
+            if (i + 1 < lines.length) {
+              const nextLine = lines[i + 1].trim();
+              const nextPriceMatch = nextLine.match(/^\$?(\d+\.\d{2})$/);
+              if (nextPriceMatch) {
+                const price = parseFloat(nextPriceMatch[1]);
+                // Check if this looks like a quantity + item name (e.g., ".5L Bitburger")
+                const qtyMatch = line.match(/^\.?(\d+(?:\.\d+)?)\s*[Ll]?\s+(.+)$/);
+                if (qtyMatch && parseFloat(qtyMatch[1]) < 10) {
+                  // This looks like a portion size, not a quantity (e.g., ".5L" is half liter)
+                  // Treat the whole thing as the item name
+                  completeItems.push({ qty: 1, name: line, totalPrice: price });
+                  console.log(`Found item name + price (next line): ${line} @ $${price}`);
+                } else {
+                  completeItems.push({ qty: 1, name: line, totalPrice: price });
+                  console.log(`Found item name + price (next line): ${line} @ $${price}`);
+                }
+                i++; // Skip the price line since we've used it
+                continue;
+              }
+            }
+            // If no price on next line, could still be an item - track it
+            itemNamesNoQty.push({ qty: 1, name: line, index: i });
+            console.log(`Found potential item name (no immediate price): ${line}`);
+          }
         }
         
         console.log('=== MATCHING PHASE ===');
         console.log('Items without prices:', itemLines);
+        console.log('Items without qty (names only):', itemNamesNoQty);
         console.log('Standalone prices:', priceLines);
         console.log('Complete items:', completeItems);
         console.log('Detected tax so far:', detectedTax);
+        console.log('Detected tip so far:', detectedTip);
         
         // Add complete items first
         completeItems.forEach((item, idx) => {
@@ -648,9 +723,12 @@
           });
         });
         
+        // Extract just the price values from priceLines for matching
+        const priceValues = priceLines.map(p => p.price);
+        
         // Figure out how many prices are for items vs footer (subtotal/tax/tip/total)
         // The footer typically has 2-4 prices at the end
-        let pricesToMatch = [...priceLines];
+        let pricesToMatch = [...priceValues];
         
         if (pricesToMatch.length > itemLines.length) {
           const numItemPrices = itemLines.length;
@@ -701,8 +779,9 @@
         console.log('=== FINAL RESULTS ===');
         console.log('Items:', parsedItems);
         console.log('Tax:', detectedTax);
+        console.log('Tip:', detectedTip);
         
-        return { items: parsedItems, tax: detectedTax };
+        return { items: parsedItems, tax: detectedTax, tip: detectedTip };
       };
 
       const handleImageUpload = async (e) => {
@@ -761,6 +840,10 @@
                 setItems(parsed.items);
                 if (parsed.tax > 0) {
                   setTax(parsed.tax);
+                }
+                if (parsed.tip > 0) {
+                  setTip(parsed.tip);
+                  setTipType('dollar');
                 }
                 setStep('review');
               } else {

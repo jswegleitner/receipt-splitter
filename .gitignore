@@ -8,3 +8,23 @@ Thumbs.db
 
 # Original tsx file (not needed for deployment)
 receipt_splitter.tsx
+# ==========================================
+# PRIVATE - Strategy & Business Documents
+# ==========================================
+GO_TO_MARKET_STRATEGY.md
+COMPETITOR_ANALYSIS.md
+OCR_INTEGRATION_OPTIONS.md
+
+# Test receipts (may contain personal data)
+Test Receipts/
+
+# Static archive versions
+Static Archive/
+
+# URL shortcuts
+*.url
+
+# Environment/secrets (if added later)
+.env
+.env.local
+.env.*.local

@@ -1809,44 +1809,13 @@
                       <span>${totalBill.toFixed(2)}</span>
                     </div>
                   </div>
-                  
-                  <h3 className="text-lg font-semibold mb-2">Add People <span className="text-sm font-normal text-gray-500">(optional - can add during split)</span></h3>
-                  <div className="flex gap-2 mb-3">
-                    <input
-                      ref={personInputRef}
-                      type="text"
-                      value={newPerson}
-                      onChange={(e) => setNewPerson(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && addPerson()}
-                      placeholder="Name"
-                      className="flex-1 px-3 py-2 border rounded"
-                    />
-                    <button 
-                      onClick={addPerson} 
-                      onMouseDown={(e) => e.preventDefault()}
-                      className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700"
-                    >
-                      Add
-                    </button>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    {people.map(person => (
-                      <span key={person} className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full flex items-center gap-2">
-                        {person}
-                        <button onClick={() => removePerson(person)} className="hover:text-indigo-600">
-                          <Icon icon={X} className="w-4 h-4" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
 
                   <button
                     onClick={startSplitting}
                     disabled={items.length === 0}
                     className="w-full bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
                   >
-                    {people.length === 0 ? 'Continue to Split (Add People There)' : 'Continue to Split'}
+                    Continue to Split
                   </button>
                 </div>
               </div>

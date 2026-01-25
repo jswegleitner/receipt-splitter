@@ -929,14 +929,16 @@
               const totalPrice = itemFields.TotalPrice?.valueCurrency?.amount || itemFields.Price?.valueCurrency?.amount || 0;
               const quantity = itemFields.Quantity?.valueNumber || 1;
               
-              if (description && totalPrice > 0) {
-                parsedItems.push({
-                  id: `${Date.now()}_${index}`,
-                  name: description,
-                  price: totalPrice,
-                  qty: quantity
-                });
-              }
+                if (description && totalPrice > 0) {
+                  // If quantity > 1, price should be unit price
+                  const unitPrice = quantity > 1 ? totalPrice / quantity : totalPrice;
+                  parsedItems.push({
+                    id: `${Date.now()}_${index}`,
+                    name: description,
+                    price: unitPrice,
+                    qty: quantity
+                  });
+                }
             });
             
             // Extract tax

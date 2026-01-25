@@ -1978,9 +1978,20 @@
 
                 {selectedPerson && (
                   <div className="border rounded-lg overflow-hidden">
-                    <div className="bg-indigo-600 text-white px-4 py-3 font-bold flex items-center gap-2">
-                      <Icon icon={Users} className="w-5 h-5" />
-                      {selectedPerson}'s Items
+                    <div className="bg-indigo-600 text-white px-4 py-3 font-bold flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Icon icon={Users} className="w-5 h-5" />
+                        {selectedPerson}'s Items
+                      </div>
+                      <button 
+                        onClick={() => {
+                          removePerson(selectedPerson);
+                        }}
+                        className="text-white hover:text-red-200 transition p-1 rounded hover:bg-indigo-700"
+                        title={`Remove ${selectedPerson}`}
+                      >
+                        <Icon icon={X} className="w-5 h-5" />
+                      </button>
                     </div>
                     
                     <div className="divide-y">

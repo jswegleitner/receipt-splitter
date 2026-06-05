@@ -38,6 +38,8 @@ function LucideSvg({ className = "w-4 h-4", children, ...props }) {
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       fill="none"
       stroke="currentColor"
       strokeWidth="2"
@@ -1171,7 +1173,7 @@ function ReceiptSplitter() {
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
           <h1 className="text-3xl font-bold text-gray-800 mb-2 flex items-center gap-2">
-            <DollarSignIcon className="text-indigo-600" />
+            <DollarSignIcon className="w-8 h-8 text-indigo-600" />
             Receipt Splitter
           </h1>
           <p className="text-gray-600">Split bills easily with friends</p>

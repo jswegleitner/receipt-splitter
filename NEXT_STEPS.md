@@ -39,15 +39,27 @@ All in [index.html](index.html). **Verified:** full Babel transpile passes (0 sy
 - **3.x ✅ (mostly)** `role="checkbox"`+`aria-checked` on the claim checkbox; `inputmode="decimal"`+`min` on all numeric inputs; `onKeyPress`→`onKeyDown` everywhere; modals get **Esc-to-close, autofocus, backdrop-click close, `role="dialog"`/`aria-modal`**; `aria-label`/`htmlFor` added across inputs. *Viewport already allows zoom* (no `maximum-scale`/`user-scalable=no`), and per-item status already pairs color with text — nothing to change there. **Deferred:** a full Tab focus-trap inside modals (Esc + autofocus shipped).
 - **4.x ✅ (mostly)** Removed dead `personInputRef`; collapsed the duplicated 37-line inline add-person handler + dead `addPerson` into one `addPerson(rawName)`; stripped the spammy `createRoom` `console.log` (+ benign catch-block logs). **Deferred:** centralizing magic strings (step names / room field names) — high churn, low impact; skipped for now.
 
-### Bigger items
-- **2.1 Collapse 5 share mechanisms into 2** — keep "Split together (live)" = room code, "Share results" = `?share=` link. Retire the broken `?s=` path and the base64 manual claim-code + Import modal.
-- **6. Firebase security/concurrency** — commit restrictive security rules; stop `cleanupOldRooms` from downloading the entire `rooms` tree to every visitor; lengthen 5-char room codes; switch claims writes from whole-object `set()` to per-person child paths (kills last-write-wins clobbering + most `__placeholder__` code).
-- **5. Light build (adopted; Node now ready)** — esbuild to drop the ~3MB in-browser Babel, Tailwind CLI purge, and a unit test that locks in the Σ(person totals)==bill invariant. Output stays a single `index.html`. Add only esbuild + tailwindcss (+ a test runner) to keep npm supply-chain exposure small.
+### ✅ Phase 5 light build — DONE
+Source now lives in `src/` (`app.jsx`, `calc.js`, `index.css`, `index.template.html`); `npm run build` (esbuild + Tailwind CLI, see `build.mjs`) emits the single self-contained `index.html` (the deployed file). Dropped the ~3 MB in-browser Babel + React/Tailwind CDNs → ~200 KB total, self-contained except Firebase. Money math extracted to pure `src/calc.js` with `test/calc.test.js` (8 cases) locking in Σ(person totals)==bill; run `npm test`. Also dropped the broken Lucide CDN for inline-SVG icons. **Workflow now: edit `src/`, `npm run build`, commit the rebuilt `index.html`.** Deploy unchanged (GitHub Pages from `main`).
+
+### ⏭️ Remaining bigger items (priority order)
+1. **Phase 6 — Firebase security/concurrency (do next; real data exposure today).** Commit restrictive Realtime DB security rules; stop `cleanupOldRooms` (`src/app.jsx`) from `database.ref('rooms').get()` on every load (downloads *all* users' receipts to *every* visitor + lets any client `remove()` rooms) — scope to a query, move server-side, or drop it; lengthen the 5-char room codes; switch claims/claimQuantities from whole-object `set()` to per-person child paths (kills last-write-wins clobbering of concurrent guests + most `__placeholder__` code).
+2. **2.1 — Collapse 5 share mechanisms into 2.** Keep "Split together (live)" = room code and "Share results" = `?share=` link. Retire the broken `?s=` path and the entire base64 manual claim-code system (`generateMyClaimsCode`/`submitMyClaims`/`importFriendClaims` + Import modal). Removes the most confusing flow + dead code.
+
+### Polish / smaller deferred
+- Modal **Tab focus-trap** (Esc + autofocus + backdrop-close already shipped).
+- **Magic-string constants** (step names, room field names) — now easy as `src/constants.js`.
+- **SRI on the two Firebase compat `<script>`s** in `src/index.template.html` (the only remaining CDN).
+- **Real-time clarity (2.4):** sync-status from Firebase `.info/connected` (`isConnected` is set true and never reset, so the UI lies on disconnect); disable host-only controls for guests with a hint; confirm-before-removing-a-person.
+- **OCR feedback (2.5):** better Azure error guidance + a thumbnail of the scanned image.
+- Delete the stale `receipt_splitter.tsx` reference file at root.
+
+### Build/DX niceties (optional, now that the build exists)
+- `npm run dev` watch mode (esbuild `--watch` + tailwind `--watch`).
+- A GitHub Actions workflow to `npm test` on push, and optionally **build in CI** so only `src/` is committed (avoids the noisy minified-`index.html` diffs) and Pages deploys the artifact.
 
 ### Secondary / informational
-- **Commercial path** (only if pursued): thin serverless proxy to hide a shared OCR key + enable payments/rate-limits, then Stripe, analytics, PWA, custom domain. See the strategy docs already in the repo.
+- **Commercial path** (only if pursued, and only after Phase 6): thin serverless proxy to hide a shared OCR key + enable payments/rate-limits, then Stripe, analytics, PWA, custom domain. See the strategy docs already in the repo.
 
 ## To resume in a new chat
-Point it at this file and the plan: e.g. *"Continue the Receipt Splitter plan — Phase 0 and the Phase 1–4 quick wins are done (see NEXT_STEPS.md). Start the bigger items: 2.1 share-model consolidation, Phase 6 Firebase security, Phase 5 light build."*
-
-**Recommended before the bigger items:** browser smoke-test the quick-win changes — new scan screen (Scan/Enter/Sample/Join + collapsible Azure settings), toasts on share/copy, Esc-closes-modals, debounced typing still syncs in a room, and the Σ(person totals)==bill console invariant stays quiet.
+Point it at this file: e.g. *"Continue the Receipt Splitter plan — Phases 0–5 + quick wins are done (see NEXT_STEPS.md). Start Phase 6 (Firebase security)."* Remember the build workflow: edit `src/`, `npm run build`, commit the rebuilt `index.html`.

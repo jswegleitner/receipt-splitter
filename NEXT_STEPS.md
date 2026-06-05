@@ -19,12 +19,14 @@ All in [index.html](index.html), documented in [CLAUDE.md](CLAUDE.md) history. *
 ### Recommended before moving on
 - Browser smoke-test: open `index.html` in VS Code Live Server → scan/enter → review → split → results. Confirm totals add up and the console stays quiet.
 
-## 🧰 Environment
+## 🧰 Environment & build
 
-- **Node v24.16.0** installed at `C:\Program Files\nodejs` (npm 11.13.0). Added to **user PATH** this session — open a new terminal for `node`/`npm` to resolve. (Chocolatey couldn't set machine PATH without admin; the binary install was fine.)
-- **Offline JSX syntax check recipe** (no project deps needed):
-  1. `Invoke-WebRequest https://unpkg.com/@babel/standalone/babel.min.js -OutFile $env:TEMP\babel-standalone.js`
-  2. Run a tiny Node script that extracts the `<script type="text/babel">` body from `index.html` and calls `Babel.transform(code, { presets: ['react'] })`. (A working copy was left at `%TEMP%\verify_jsx.js`.)
+- **Node v24.16.0** at `C:\Program Files\nodejs` (npm 11.13.0). **Gotcha:** `node`/`npm` are *not* on PATH in fresh shells here. Either open a new terminal, or prefix commands: PowerShell `$env:Path = "C:\Program Files\nodejs;$env:Path"; npm ...`.
+- **Build workflow** (deps already installed; `node_modules/` is gitignored):
+  - `npm run build` → bundles `src/` into the deployed `index.html` (esbuild + Tailwind CLI; see `build.mjs`).
+  - `npm test` → runs `test/calc.test.js` (the Σ(person totals)==bill guard, `node:test`).
+  - **Edit `src/`, never hand-edit `index.html`** (it's generated). Commit the rebuilt `index.html` alongside `src/` changes; push to `main` deploys (GitHub Pages).
+- The old in-browser-Babel JSX-check recipe is obsolete — esbuild now reports syntax errors at build time.
 
 ## ⏭️ Next steps (from the approved plan, in priority order)
 

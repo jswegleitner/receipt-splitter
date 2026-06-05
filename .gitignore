@@ -24,6 +24,10 @@ Static Archive/
 # URL shortcuts
 *.url
 
+# Build tooling (Phase 5 light build) — output index.html IS committed
+node_modules/
+.build/
+
 # Environment/secrets (if added later)
 .env
 .env.local

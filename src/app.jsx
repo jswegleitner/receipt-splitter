@@ -1,0 +1,2109 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import * as calc from './calc.js';
+
+// Firebase uses the global `firebase` provided by the compat CDN scripts in
+// index.html (kept as a CDN dependency — the app uses the compat global API).
+const firebaseConfig = {
+  apiKey: "AIzaSyAWU9MLMuHpBWbnWtVwLBQbJKwZXs59hWo",
+  authDomain: "receipt-splitter-a199b.firebaseapp.com",
+  databaseURL: "https://receipt-splitter-a199b-default-rtdb.firebaseio.com",
+  projectId: "receipt-splitter-a199b",
+  storageBucket: "receipt-splitter-a199b.firebasestorage.app",
+  messagingSenderId: "930736923507",
+  appId: "1:930736923507:web:3efacf3a3c46870e6bdb06"
+};
+if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+const database = firebase.database();
+
+const { useState, useEffect } = React;
+
+// Simple localStorage wrapper to match the window.storage API
+window.storage = {
+  get: async (key) => {
+    const value = localStorage.getItem(key);
+    return value ? { value } : null;
+  },
+  set: async (key, value) => {
+    localStorage.setItem(key, value);
+  }
+};
+
+// Inline SVG icons (official Lucide 24x24 paths). Rendered directly as React
+// elements — no runtime DOM mutation — because lucide@1.x's createIcons() path
+// doesn't bind to its named exports reliably (the old <Icon> emitted an empty
+// data-lucide and nothing rendered, while the placeholder still reserved space).
+function LucideSvg({ className = "w-4 h-4", children, ...props }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+      {...props}
+    >
+      {children}
+    </svg>
+  );
+}
+const DollarSignIcon = (props) => (
+  <LucideSvg {...props}>
+    <line x1="12" x2="12" y1="2" y2="22" />
+    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+  </LucideSvg>
+);
+const CameraIcon = (props) => (
+  <LucideSvg {...props}>
+    <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+    <circle cx="12" cy="13" r="3" />
+  </LucideSvg>
+);
+const PlusIcon = (props) => (
+  <LucideSvg {...props}>
+    <path d="M5 12h14" />
+    <path d="M12 5v14" />
+  </LucideSvg>
+);
+const UsersIcon = (props) => (
+  <LucideSvg {...props}>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </LucideSvg>
+);
+const Share2Icon = (props) => (
+  <LucideSvg {...props}>
+    <circle cx="18" cy="5" r="3" />
+    <circle cx="6" cy="12" r="3" />
+    <circle cx="18" cy="19" r="3" />
+    <line x1="8.59" x2="15.42" y1="13.51" y2="17.49" />
+    <line x1="15.41" x2="8.59" y1="6.51" y2="10.49" />
+  </LucideSvg>
+);
+const CheckIcon = (props) => (
+  <LucideSvg {...props}>
+    <path d="M20 6 9 17l-5-5" />
+  </LucideSvg>
+);
+
+// Inline X SVG component that always renders
+function XIcon({ className = "w-4 h-4", ...props }) {
+  return (
+    <svg 
+      xmlns="http://www.w3.org/2000/svg" 
+      viewBox="0 0 24 24" 
+      fill="none" 
+      stroke="currentColor" 
+      strokeWidth="2" 
+      strokeLinecap="round" 
+      strokeLinejoin="round" 
+      className={className}
+      {...props}
+    >
+      <path d="M18 6 6 18"></path>
+      <path d="m6 6 12 12"></path>
+    </svg>
+  );
+}
+
+// Normalize records loaded from Firebase / shared links: drop placeholders, coerce numerics
+// so downstream math and .toFixed() never see undefined/NaN.
+function normalizeItems(arr) {
+  return (Array.isArray(arr) ? arr : [])
+    .filter(i => i && i.id !== '__placeholder__')
+    .map(i => ({ id: i.id, name: i.name || '', price: Number(i.price) || 0, qty: Number(i.qty) || 1 }));
+}
+function normalizePeople(arr) {
+  return (Array.isArray(arr) ? arr : []).filter(p => p && p !== '__placeholder__');
+}
+
+function ReceiptSplitter() {
+  const [step, setStep] = useState('scan');
+  const [items, setItems] = useState([]);
+  const [people, setPeople] = useState([]);
+  const [newPerson, setNewPerson] = useState('');
+  const [claims, setClaims] = useState({});
+  const [claimQuantities, setClaimQuantities] = useState({});
+  const [selectedPerson, setSelectedPerson] = useState('');
+  const [sessionId, setSessionId] = useState(null);
+  const [tax, setTax] = useState(0);
+  const [tip, setTip] = useState(0);
+  const [tipType, setTipType] = useState('percent');
+  const [tipBase, setTipBase] = useState('subtotalPlusTax'); // 'subtotal' or 'subtotalPlusTax'
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [ocrError, setOcrError] = useState('');
+  const [rawOcrText, setRawOcrText] = useState('');
+  const [showRawText, setShowRawText] = useState(false);
+  const [isSharedView, setIsSharedView] = useState(false);
+  const [isClaimMode, setIsClaimMode] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importCode, setImportCode] = useState('');
+  
+  // Room-based collaboration
+  const [roomCode, setRoomCode] = useState('');
+  const [isHost, setIsHost] = useState(false);
+  const [showJoinModal, setShowJoinModal] = useState(false);
+  const [joinCode, setJoinCode] = useState('');
+  const [roomError, setRoomError] = useState('');
+  const [isConnected, setIsConnected] = useState(false);
+  const isReceivingUpdate = React.useRef(false);
+
+  // Toast notifications — non-blocking replacement for alert()/prompt().
+  const [toast, setToast] = useState(null); // { message, type: 'info' | 'success' | 'error' }
+  const toastTimer = React.useRef(null);
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2800);
+  };
+
+  // Onboarding: Azure key entry is tucked into a collapsible "Scan settings" panel.
+  const [showAzureSettings, setShowAzureSettings] = useState(false);
+
+  // Debounced Firebase writes — coalesce rapid edits (typing) into one write per field.
+  const syncTimers = React.useRef({});
+  const pendingSync = React.useRef({});
+  
+  // API Keys — Azure Document Intelligence is the sole OCR engine
+  const AZURE_ENDPOINT = localStorage.getItem('azure_doc_endpoint') || '';
+  const AZURE_API_KEY = localStorage.getItem('azure_doc_api_key') || '';
+
+  // Generate a short room code
+  const generateRoomCode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 5; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+  };
+
+  // Helper to sanitize data for Firebase (removes empty arrays/objects)
+  const sanitizeForFirebase = (obj) => {
+    if (obj === null || obj === undefined) return null;
+    if (Array.isArray(obj)) {
+      // Firebase doesn't like empty arrays, add placeholder
+      return obj.length > 0 ? obj : ['__placeholder__'];
+    }
+    if (typeof obj === 'object') {
+      const result = {};
+      let hasKeys = false;
+      for (const [key, value] of Object.entries(obj)) {
+        const sanitized = sanitizeForFirebase(value);
+        if (sanitized !== null && sanitized !== undefined) {
+          // Skip empty arrays/objects within nested objects
+          if (Array.isArray(sanitized) && sanitized.length === 0) continue;
+          if (typeof sanitized === 'object' && !Array.isArray(sanitized) && Object.keys(sanitized).length === 0) continue;
+          result[key] = sanitized;
+          hasKeys = true;
+        }
+      }
+      return hasKeys ? result : { __placeholder__: true };
+    }
+    return obj;
+  };
+
+  // Create a new room
+  const createRoom = async () => {
+    try {
+      const code = generateRoomCode();
+      const roomRef = database.ref(`rooms/${code}`);
+      
+      // Helper to sanitize keys for Firebase (replace periods with underscores)
+      const sanitizeKey = (key) => String(key).replace(/\./g, '_');
+      
+      // Sanitize claims - remove empty arrays, ensure non-empty, fix keys
+      const sanitizedClaims = {};
+      for (const [person, itemIds] of Object.entries(claims)) {
+        if (Array.isArray(itemIds) && itemIds.length > 0) {
+          // Sanitize item IDs in the array
+          sanitizedClaims[person] = itemIds.map(id => sanitizeKey(id));
+        }
+      }
+      
+      // Sanitize claimQuantities - remove empty objects, fix keys
+      const sanitizedClaimQtys = {};
+      for (const [person, qtys] of Object.entries(claimQuantities)) {
+        if (qtys && typeof qtys === 'object' && Object.keys(qtys).length > 0) {
+          // Sanitize item ID keys
+          const sanitizedQtys = {};
+          for (const [itemId, qty] of Object.entries(qtys)) {
+            sanitizedQtys[sanitizeKey(itemId)] = qty;
+          }
+          sanitizedClaimQtys[person] = sanitizedQtys;
+        }
+      }
+      
+      // Sanitize items - ensure no undefined values
+      const sanitizedItems = items.map(item => ({
+        id: item.id ? String(item.id).replace(/\./g, '_') : `${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        name: item.name || '',
+        price: parseFloat(item.price) || 0,
+        qty: parseFloat(item.qty) || 1
+      }));
+      
+      // Build room data with proper placeholders for Firebase
+      const roomData = {
+        items: sanitizedItems.length > 0 ? sanitizedItems : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }],
+        people: people.length > 0 ? people : ['__placeholder__'],
+        claims: Object.keys(sanitizedClaims).length > 0 ? sanitizedClaims : { __placeholder__: ['__placeholder__'] },
+        claimQuantities: Object.keys(sanitizedClaimQtys).length > 0 ? sanitizedClaimQtys : { __placeholder__: { __placeholder__: 0 } },
+        tax: parseFloat(tax) || 0,
+        tip: parseFloat(tip) || 0,
+        tipType: tipType || 'percent',
+        tipBase: tipBase || 'subtotalPlusTax',
+        createdAt: Date.now(),
+        hostId: sessionId || 'unknown'
+      };
+      
+      await roomRef.set(roomData);
+      setRoomCode(code);
+      setIsHost(true);
+      setIsConnected(true);
+      
+      // Start listening for changes
+      subscribeToRoom(code);
+      
+      return code;
+    } catch (error) {
+      console.error('Error creating room:', error);
+      console.error('Error details:', error.message, error.code);
+      showToast(`Couldn't create room: ${error.message || 'please try again.'}`, 'error');
+      return null;
+    }
+  };
+
+  // Join an existing room
+  const joinRoom = async (code) => {
+    const upperCode = code.toUpperCase().trim();
+    const roomRef = database.ref(`rooms/${upperCode}`);
+    
+    const snapshot = await roomRef.get();
+    if (!snapshot.exists()) {
+      setRoomError('Room not found. Check the code and try again.');
+      return false;
+    }
+    
+    const data = snapshot.val();
+    setItems(normalizeItems(data.items));
+    setPeople(normalizePeople(data.people));
+    setClaims(data.claims || {});
+    setClaimQuantities(data.claimQuantities || {});
+    setTax(data.tax || 0);
+    setTip(data.tip || 0);
+    setTipType(data.tipType || 'percent');
+    setTipBase(data.tipBase || 'subtotalPlusTax');
+    setRoomCode(upperCode);
+    setIsHost(false);
+    setIsConnected(true);
+    setStep('split');
+    setShowJoinModal(false);
+    setJoinCode('');
+    setRoomError('');
+    
+    // Start listening for changes
+    subscribeToRoom(upperCode);
+    
+    return true;
+  };
+
+  // Subscribe to real-time updates
+  const subscribeToRoom = (code) => {
+    const roomRef = database.ref(`rooms/${code}`);
+    
+    roomRef.on('value', (snapshot) => {
+      try {
+        if (snapshot.exists()) {
+          isReceivingUpdate.current = true;
+          const data = snapshot.val();
+          
+          // Filter out placeholder data + coerce numeric fields
+          const cleanItems = normalizeItems(data.items);
+          const cleanPeople = normalizePeople(data.people);
+          const cleanClaims = { ...data.claims };
+          delete cleanClaims.__placeholder__;
+          const cleanQuantities = { ...data.claimQuantities };
+          delete cleanQuantities.__placeholder__;
+          
+          setItems(cleanItems);
+          setPeople(cleanPeople);
+          setClaims(cleanClaims);
+          setClaimQuantities(cleanQuantities);
+          setTax(data.tax || 0);
+          setTip(data.tip || 0);
+          setTipType(data.tipType || 'percent');
+          setTipBase(data.tipBase || 'subtotalPlusTax');
+          // Reset flag after state updates are scheduled
+          setTimeout(() => { isReceivingUpdate.current = false; }, 100);
+        }
+      } catch (error) {
+        console.error('Error receiving room update:', error);
+        isReceivingUpdate.current = false;
+      }
+    });
+  };
+
+  // Update room data (called when changes are made)
+  const updateRoom = (updates) => {
+    if (!roomCode || !isConnected) return;
+    
+    try {
+      const roomRef = database.ref(`rooms/${roomCode}`);
+      
+      // Sanitize data for Firebase
+      const sanitizedUpdates = {
+        items: updates.items?.length > 0 ? updates.items : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }],
+        people: updates.people?.length > 0 ? updates.people : ['__placeholder__'],
+        claims: Object.keys(updates.claims || {}).length > 0 ? updates.claims : { __placeholder__: [] },
+        claimQuantities: Object.keys(updates.claimQuantities || {}).length > 0 ? updates.claimQuantities : { __placeholder__: {} },
+        tax: updates.tax || 0,
+        tip: updates.tip || 0,
+        tipType: updates.tipType || 'percent',
+        tipBase: updates.tipBase || 'subtotalPlusTax',
+        updatedAt: Date.now()
+      };
+      
+      roomRef.update(sanitizedUpdates);
+    } catch (error) {
+      console.error('Error updating room:', error);
+    }
+  };
+
+  // Helper to sync specific fields to room
+  const syncToRoom = (field, value) => {
+    if (!roomCode || !isConnected || isReceivingUpdate.current) return;
+    
+    try {
+      const roomRef = database.ref(`rooms/${roomCode}/${field}`);
+      
+      // Sanitize based on field type - Firebase doesn't like empty arrays/objects
+      if (field === 'claims') {
+        // Filter out empty arrays and ensure non-empty
+        const sanitized = {};
+        for (const [person, itemIds] of Object.entries(value || {})) {
+          if (Array.isArray(itemIds) && itemIds.length > 0) {
+            sanitized[person] = itemIds;
+          }
+        }
+        roomRef.set(Object.keys(sanitized).length > 0 ? sanitized : { __placeholder__: ['__placeholder__'] });
+      } else if (field === 'claimQuantities') {
+        // Filter out empty objects
+        const sanitized = {};
+        for (const [person, qtys] of Object.entries(value || {})) {
+          if (qtys && typeof qtys === 'object' && Object.keys(qtys).length > 0) {
+            sanitized[person] = qtys;
+          }
+        }
+        roomRef.set(Object.keys(sanitized).length > 0 ? sanitized : { __placeholder__: { __placeholder__: 0 } });
+      } else if (field === 'items') {
+        roomRef.set(value.length > 0 ? value : [{ id: '__placeholder__', name: '', price: 0, qty: 0 }]);
+      } else if (field === 'people') {
+        roomRef.set(value.length > 0 ? value : ['__placeholder__']);
+      } else {
+        roomRef.set(value);
+      }
+      
+      // Also update the timestamp
+      database.ref(`rooms/${roomCode}/updatedAt`).set(Date.now());
+    } catch (error) {
+      console.error(`Error syncing ${field}:`, error);
+    }
+  };
+
+  // Debounced variant for high-frequency edits (typing into qty/tax/tip).
+  // Coalesces keystrokes into one write per field after `delay` ms idle.
+  const syncToRoomDebounced = (field, value, delay = 400) => {
+    pendingSync.current[field] = value;
+    if (syncTimers.current[field]) clearTimeout(syncTimers.current[field]);
+    syncTimers.current[field] = setTimeout(() => {
+      syncToRoom(field, pendingSync.current[field]);
+      delete syncTimers.current[field];
+      delete pendingSync.current[field];
+    }, delay);
+  };
+
+  // Flush a pending debounced write immediately (e.g. on input blur).
+  const flushSyncField = (field) => {
+    if (syncTimers.current[field]) {
+      clearTimeout(syncTimers.current[field]);
+      syncToRoom(field, pendingSync.current[field]);
+      delete syncTimers.current[field];
+      delete pendingSync.current[field];
+    }
+  };
+
+  // Clean up old rooms (>7 days) - runs on app load
+  const cleanupOldRooms = async () => {
+    const roomsRef = database.ref('rooms');
+    const snapshot = await roomsRef.get();
+    if (snapshot.exists()) {
+      const rooms = snapshot.val();
+      const oneWeekAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      
+      Object.keys(rooms).forEach(async (code) => {
+        if (rooms[code].createdAt < oneWeekAgo) {
+          await database.ref(`rooms/${code}`).remove();
+        }
+      });
+    }
+  };
+
+  // Leave room and unsubscribe
+  const leaveRoom = () => {
+    if (roomCode) {
+      database.ref(`rooms/${roomCode}`).off();
+    }
+    setRoomCode('');
+    setIsHost(false);
+    setIsConnected(false);
+  };
+
+  // Share room link
+  const shareRoomLink = async () => {
+    const url = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Join my receipt split!',
+          text: `Join with code: ${roomCode}`,
+          url: url
+        });
+        return;
+      } catch (e) {}
+    }
+    
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast(`Room link copied! Code: ${roomCode}`, 'success');
+    } catch (e) {
+      showToast('Could not copy the link — copy it from the address bar.', 'error');
+    }
+  };
+
+  useEffect(() => {
+    // Clean up old rooms on app load
+    cleanupOldRooms();
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room');
+    
+    // Check for room code in URL
+    if (roomParam) {
+      joinRoom(roomParam);
+      return;
+    }
+
+    const sid = urlParams.get('s');
+    const shareData = urlParams.get('share');
+    const claimData = urlParams.get('claim');
+    
+    // Check for claim mode link (friends claiming their items)
+    if (claimData) {
+      try {
+        const decoded = JSON.parse(atob(claimData));
+        setItems(decoded.items || []);
+        setPeople(decoded.people || []);
+        setClaims({});
+        setClaimQuantities({});
+        setTax(decoded.tax || 0);
+        setTip(decoded.tip || 0);
+        setTipType(decoded.tipType || 'percent');
+        setTipBase(decoded.tipBase || 'subtotalPlusTax');
+        setStep('split');
+        setIsClaimMode(true);
+        return;
+      } catch (e) {
+        // Ignore malformed claim link data
+      }
+    }
+    
+    // Check for shared results view
+    if (shareData) {
+      try {
+        const decoded = JSON.parse(atob(shareData));
+        setItems(decoded.items || []);
+        setPeople(decoded.people || []);
+        setClaims(decoded.claims || {});
+        setClaimQuantities(decoded.claimQuantities || {});
+        setTax(decoded.tax || 0);
+        setTip(decoded.tip || 0);
+        setTipType(decoded.tipType || 'percent');
+        setTipBase(decoded.tipBase || 'subtotalPlusTax');
+        setStep('results');
+        setIsSharedView(true);
+        return;
+      } catch (e) {
+        // Ignore malformed share link data
+      }
+    }
+    
+    if (sid) {
+      setSessionId(sid);
+      loadSession(sid);
+    } else {
+      const newId = 'session_' + Date.now();
+      setSessionId(newId);
+    }
+  }, []);
+
+  const loadSession = async (sid) => {
+    try {
+      const result = await window.storage.get(sid);
+      if (result) {
+        const data = JSON.parse(result.value);
+        setItems(normalizeItems(data.items));
+        setPeople(normalizePeople(data.people));
+        setClaims(data.claims || {});
+        setClaimQuantities(data.claimQuantities || {});
+        setTax(data.tax || 0);
+        setTip(data.tip || 0);
+        setTipType(data.tipType || 'percent');
+        setTipBase(data.tipBase || 'subtotalPlusTax');
+        setStep(data.step || 'split');
+        if (data.people && data.people.length > 0) {
+          setSelectedPerson(data.people[0]);
+        }
+      }
+    } catch (e) {
+      // No existing session to load
+    }
+  };
+
+  const saveSession = async (data) => {
+    if (!sessionId) return;
+    try {
+      await window.storage.set(sessionId, JSON.stringify(data));
+    } catch (e) {
+      console.error('Failed to save session:', e);
+    }
+  };
+
+  const saveAzureEndpoint = (endpoint) => {
+    localStorage.setItem('azure_doc_endpoint', endpoint);
+  };
+  
+  const saveAzureApiKey = (key) => {
+    localStorage.setItem('azure_doc_api_key', key);
+  };
+
+  // Handle image upload with Azure Document Intelligence
+  const handleImageUploadAzure = async (file) => {
+    const endpoint = localStorage.getItem('azure_doc_endpoint');
+    const apiKey = localStorage.getItem('azure_doc_api_key');
+    
+    if (!endpoint || !apiKey) {
+      setOcrError('Add your Azure endpoint and API key in Scan settings below, then try again. (Or enter items manually.)');
+      setShowAzureSettings(true);
+      return;
+    }
+    
+    setIsProcessing(true);
+    setOcrError('');
+    
+    try {
+      // Convert image to base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      
+      // Clean endpoint URL (remove trailing slash if present)
+      const cleanEndpoint = endpoint.replace(/\/$/, '');
+      
+      // Call Azure Document Intelligence Receipt API
+      const analyzeResponse = await fetch(
+        `${cleanEndpoint}/documentintelligence/documentModels/prebuilt-receipt:analyze?api-version=2024-11-30`,
+        {
+          method: 'POST',
+          headers: {
+            'Ocp-Apim-Subscription-Key': apiKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            base64Source: base64
+          })
+        }
+      );
+      
+      if (!analyzeResponse.ok) {
+        const errorData = await analyzeResponse.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `Azure API error: ${analyzeResponse.status}`);
+      }
+      
+      // Get the operation location for polling
+      const operationLocation = analyzeResponse.headers.get('Operation-Location');
+      if (!operationLocation) {
+        throw new Error('No operation location returned from Azure');
+      }
+      
+      // Poll for results
+      let result = null;
+      let attempts = 0;
+      const maxAttempts = 30; // 30 seconds max
+      
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const resultResponse = await fetch(operationLocation, {
+          headers: {
+            'Ocp-Apim-Subscription-Key': apiKey,
+          }
+        });
+        
+        const resultData = await resultResponse.json();
+        
+        if (resultData.status === 'succeeded') {
+          result = resultData;
+          break;
+        } else if (resultData.status === 'failed') {
+          throw new Error(resultData.error?.message || 'Azure processing failed');
+        }
+        
+        attempts++;
+      }
+      
+      if (!result) {
+        throw new Error('Timeout waiting for Azure to process receipt');
+      }
+      
+      // Store raw response for debugging
+      setRawOcrText(JSON.stringify(result.analyzeResult, null, 2));
+      
+      // Parse Azure response into our item format
+      const parsedItems = [];
+      const documents = result.analyzeResult?.documents || [];
+      
+      if (documents.length > 0) {
+        const receipt = documents[0];
+        const fields = receipt.fields || {};
+        
+        // Extract line items
+        const items = fields.Items?.valueArray || [];
+        items.forEach((item, index) => {
+          const itemFields = item.valueObject || {};
+          const description = itemFields.Description?.valueString || itemFields.ProductCode?.valueString || 'Unknown Item';
+          const totalPrice = itemFields.TotalPrice?.valueCurrency?.amount || itemFields.Price?.valueCurrency?.amount || 0;
+          const quantity = itemFields.Quantity?.valueNumber || 1;
+          
+            if (description && totalPrice > 0) {
+              // If quantity > 1, price should be unit price
+              const unitPrice = quantity > 1 ? totalPrice / quantity : totalPrice;
+              parsedItems.push({
+                id: `${Date.now()}_${index}`,
+                name: description,
+                price: unitPrice,
+                qty: quantity
+              });
+            }
+        });
+        
+        // Extract tax
+        const taxAmount = fields.TotalTax?.valueCurrency?.amount || fields.Tax?.valueCurrency?.amount || 0;
+        if (taxAmount > 0) {
+          setTax(taxAmount);
+        }
+        
+        // Extract tip
+        const tipAmount = fields.Tip?.valueCurrency?.amount || 0;
+        if (tipAmount > 0) {
+          setTip(tipAmount);
+          setTipType('amount');
+        }
+      }
+      
+      if (parsedItems.length > 0) {
+        setItems(parsedItems);
+        setStep('review');
+      } else {
+        setOcrError('Azure could not find any line items. Check the raw response below or try manual entry.');
+        setShowRawText(true);
+      }
+    } catch (error) {
+      console.error('Azure OCR Error:', error);
+      setOcrError(`Error: ${error.message}. Check your endpoint/API key or try again.`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+  
+  // Main image upload handler — Azure Document Intelligence
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    await handleImageUploadAzure(file);
+
+    // Reset file input
+    e.target.value = '';
+  };
+
+  const addItem = () => {
+    const newItem = {
+      id: `${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+      name: '',
+      price: 0,
+      qty: 1
+    };
+    const newItems = [...items, newItem];
+    setItems(newItems);
+    
+    // Host syncs item changes to room
+    if (isHost && isConnected) {
+      syncToRoom('items', newItems);
+    }
+  };
+
+  const updateItem = (id, field, value) => {
+    const newItems = items.map(item => 
+      item.id === id ? { ...item, [field]: value } : item
+    );
+    setItems(newItems);
+    
+    // Host syncs item changes to room
+    if (isHost && isConnected) {
+      syncToRoom('items', newItems);
+    }
+  };
+
+  const removeItem = (id) => {
+    const newItems = items.filter(item => item.id !== id);
+    setItems(newItems);
+    
+    // Host syncs item changes to room
+    if (isHost && isConnected) {
+      syncToRoom('items', newItems);
+    }
+  };
+
+  // Add a person — single source of truth for the split screen's two entry
+  // points (Enter key + Add button). Pass a name, or omit to use newPerson.
+  const addPerson = (rawName) => {
+    const name = (rawName != null ? rawName : newPerson).trim();
+    if (!name || people.includes(name)) return;
+    const newPeople = [...people, name];
+    setPeople(newPeople);
+    setSelectedPerson(name);
+    setNewPerson('');
+    if (isHost && isConnected) {
+      syncToRoom('people', newPeople);
+    }
+  };
+
+  const removePerson = (person) => {
+    const newPeople = people.filter(p => p !== person);
+    setPeople(newPeople);
+    const newClaims = { ...claims };
+    delete newClaims[person];
+    setClaims(newClaims);
+    const newClaimQuantities = { ...claimQuantities };
+    delete newClaimQuantities[person];
+    setClaimQuantities(newClaimQuantities);
+    if (selectedPerson === person && people.length > 1) {
+      setSelectedPerson(people.find(p => p !== person) || '');
+    }
+    
+    // Host syncs people/claims changes to room
+    if (isHost && isConnected) {
+      syncToRoom('people', newPeople);
+      syncToRoom('claims', newClaims);
+      syncToRoom('claimQuantities', newClaimQuantities);
+    }
+  };
+
+  const toggleClaim = (person, itemId) => {
+    const newClaims = { ...claims };
+    if (!newClaims[person]) newClaims[person] = [];
+    
+    const newClaimQuantities = { ...claimQuantities };
+    
+    const idx = newClaims[person].indexOf(itemId);
+    if (idx > -1) {
+      newClaims[person].splice(idx, 1);
+      if (newClaimQuantities[person]) {
+        delete newClaimQuantities[person][itemId];
+      }
+    } else {
+      newClaims[person].push(itemId);
+      if (!newClaimQuantities[person]) newClaimQuantities[person] = {};
+      newClaimQuantities[person][itemId] = 1;
+    }
+    
+    setClaims(newClaims);
+    setClaimQuantities(newClaimQuantities);
+    
+    // Sync to Firebase immediately
+    syncToRoom('claims', newClaims);
+    syncToRoom('claimQuantities', newClaimQuantities);
+  };
+
+  const updateClaimQuantity = (person, itemId, quantity, clampMin = false) => {
+    const newClaimQuantities = { ...claimQuantities };
+    if (!newClaimQuantities[person]) newClaimQuantities[person] = {};
+    const item = items.find(i => i.id === itemId);
+    const maxQty = item?.qty || 1;
+    // Allow decimal quantities, store 0 while typing, clamp on blur
+    const parsedQty = quantity === '' ? 0 : parseFloat(quantity) || 0;
+    const finalQty = clampMin ? Math.max(0.01, Math.min(parsedQty, maxQty)) : Math.min(parsedQty, maxQty);
+    newClaimQuantities[person][itemId] = finalQty;
+    setClaimQuantities(newClaimQuantities);
+
+    // Debounce rapid typing; flushed on blur (see the qty input's onBlur).
+    syncToRoomDebounced('claimQuantities', newClaimQuantities);
+  };
+
+  // Host-only functions to update tax/tip with sync
+  const updateTax = (value) => {
+    const newTax = parseFloat(value) || 0;
+    setTax(newTax);
+    if (isHost && isConnected) {
+      syncToRoomDebounced('tax', newTax);
+    }
+  };
+
+  const updateTip = (value) => {
+    const newTip = parseFloat(value) || 0;
+    setTip(newTip);
+    if (isHost && isConnected) {
+      syncToRoomDebounced('tip', newTip);
+    }
+  };
+
+  const updateTipType = (value) => {
+    setTipType(value);
+    if (isHost && isConnected) {
+      syncToRoom('tipType', value);
+    }
+  };
+
+  const updateTipBase = (value) => {
+    setTipBase(value);
+    if (isHost && isConnected) {
+      syncToRoom('tipBase', value);
+    }
+  };
+
+  const getClaimQuantity = (person, itemId) => calc.getClaimQuantity(claimQuantities, person, itemId);
+
+  // Memoized per-item claimed quantity (Σ over everyone who claimed it).
+  // Recomputed only when items/claims/claimQuantities change — not on every
+  // render-loop call of getTotalClaimedQuantity / getUnclaimedQuantity.
+  const claimedQtyMap = React.useMemo(
+    () => calc.claimedQtyByItem(items, claims, claimQuantities),
+    [items, claims, claimQuantities]
+  );
+
+  const getTotalClaimedQuantity = (itemId) => claimedQtyMap[itemId] || 0;
+
+  const getUnclaimedQuantity = (itemId) => calc.getUnclaimedQuantity(items, claimedQtyMap, itemId);
+
+  // Format quantity for display (hide decimals if whole number)
+  const formatQty = (qty) => {
+    if (Number.isInteger(qty)) return qty.toString();
+    return qty.toFixed(2).replace(/\.?0+$/, '');
+  };
+
+  const startSplitting = () => {
+    const data = { items, people, claims: {}, claimQuantities: {}, tax, tip, tipType, tipBase, step: 'split' };
+    saveSession(data);
+    setSelectedPerson(people[0] || '');
+    setStep('split');
+  };
+
+  const calculateResults = () => {
+    saveSession({ items, people, claims, claimQuantities, tax, tip, tipType, tipBase, step: 'results' });
+    setStep('results');
+  };
+
+  // All money math lives in src/calc.js (pure + unit-tested). Pass the live bill
+  // state + memoized claimed map; the component just consumes the results.
+  const billState = { items, people, claims, claimQuantities, tax, tip, tipType, tipBase, claimedMap: claimedQtyMap };
+  const { subtotal, subtotalPlusTax, tipCalculationBase, tipAmount, totalBill } = calc.computeBill(billState);
+
+  const getPersonSubtotal = (person) => calc.getPersonSubtotal(billState, person);
+  const getPersonTotal = (person) => calc.getPersonTotal(billState, person);
+
+  // Dev invariant: every split must reconcile to the bill. Warn (don't crash) on drift.
+  useEffect(() => {
+    if (step !== 'results' || people.length === 0) return;
+    const sum = people.reduce((s, p) => s + getPersonTotal(p), 0);
+    if (Math.abs(sum - totalBill) > 0.01) {
+      console.warn(`[reconcile] person totals ($${sum.toFixed(2)}) != bill ($${totalBill.toFixed(2)})`);
+    }
+  }, [step, items, people, claims, claimQuantities, tax, tip, tipType, tipBase]);
+
+  // Close any open modal on Escape.
+  useEffect(() => {
+    if (!showJoinModal && !showImportModal) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setShowJoinModal(false);
+        setShowImportModal(false);
+        setImportCode('');
+        setRoomError('');
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showJoinModal, showImportModal]);
+
+  const shareLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}?s=${sessionId}`;
+    navigator.clipboard.writeText(url);
+    showToast('Link copied!', 'success');
+  };
+
+  const generateShareLink = () => {
+    const shareData = {
+      items,
+      people,
+      claims,
+      claimQuantities,
+      tax,
+      tip,
+      tipType
+    };
+    const encoded = btoa(JSON.stringify(shareData));
+    const baseUrl = window.location.origin + window.location.pathname;
+    return `${baseUrl}?share=${encoded}`;
+  };
+
+  const shareResults = async () => {
+    const shareUrl = generateShareLink();
+    
+    // Try native share API first (works great on mobile)
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Receipt Split Results',
+          text: `Here's what everyone owes! Total: $${totalBill.toFixed(2)}`,
+          url: shareUrl
+        });
+        return;
+      } catch (e) {
+        // User cancelled or share failed, fall through to clipboard
+      }
+    }
+    
+    // Fallback to clipboard
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      showToast('Results link copied to clipboard!', 'success');
+    } catch (e) {
+      showToast('Could not copy the link — copy it from the address bar.', 'error');
+    }
+  };
+
+  // Load a demo receipt so first-time users can reach value without a scan or key.
+  const loadSampleReceipt = () => {
+    const now = Date.now();
+    setItems([
+      { id: `${now}_1`, name: 'Margherita Pizza', price: 14.00, qty: 1 },
+      { id: `${now}_2`, name: 'Caesar Salad', price: 9.50, qty: 1 },
+      { id: `${now}_3`, name: 'Spaghetti Carbonara', price: 16.00, qty: 1 },
+      { id: `${now}_4`, name: 'Craft Beer', price: 6.00, qty: 3 },
+      { id: `${now}_5`, name: 'Tiramisu', price: 7.50, qty: 2 },
+    ]);
+    setPeople([]);
+    setClaims({});
+    setClaimQuantities({});
+    setTax(5.40);
+    setTip(18);
+    setTipType('percent');
+    setTipBase('subtotalPlusTax');
+    setOcrError('');
+    setStep('review');
+    showToast('Loaded a sample receipt — edit items or continue to split.', 'info');
+  };
+
+  const startNewSplit = () => {
+    // Clear URL and start fresh
+    window.history.replaceState({}, '', window.location.pathname);
+    setIsSharedView(false);
+    setIsClaimMode(false);
+    setItems([]);
+    setPeople([]);
+    setClaims({});
+    setClaimQuantities({});
+    setTax(0);
+    setTip(0);
+    setTipType('percent');
+    setStep('scan');
+    const newId = 'session_' + Date.now();
+    setSessionId(newId);
+  };
+
+  // Generate a link for friends to claim their items
+  const generateClaimLink = () => {
+    const claimData = {
+      items,
+      people,
+      tax,
+      tip,
+      tipType
+    };
+    const encoded = btoa(JSON.stringify(claimData));
+    const baseUrl = window.location.origin + window.location.pathname;
+    return `${baseUrl}?claim=${encoded}`;
+  };
+
+  // Share claim link with friends
+  const shareClaimLink = async () => {
+    const claimUrl = generateClaimLink();
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Claim Your Items!',
+          text: 'Select your name and claim the items you ordered:',
+          url: claimUrl
+        });
+        return;
+      } catch (e) {
+        // Fall through to clipboard
+      }
+    }
+    
+    try {
+      await navigator.clipboard.writeText(claimUrl);
+      showToast('Claim link copied! Send it to your friends.', 'success');
+    } catch (e) {
+      showToast('Could not copy the link — copy it from the address bar.', 'error');
+    }
+  };
+
+  // Generate claim code for friend to send back
+  const generateMyClaimsCode = () => {
+    if (!selectedPerson) {
+      showToast('Please select your name first.', 'error');
+      return;
+    }
+    const myClaims = {
+      person: selectedPerson,
+      claims: claims[selectedPerson] || [],
+      quantities: claimQuantities[selectedPerson] || {}
+    };
+    return btoa(JSON.stringify(myClaims));
+  };
+
+  // Friend submits their claims
+  const submitMyClaims = async () => {
+    const code = generateMyClaimsCode();
+    if (!code) return;
+    
+    const text = `My claims for the receipt: ${code}`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `${selectedPerson}'s Claims`,
+          text: text
+        });
+        return;
+      } catch (e) {
+        // Fall through
+      }
+    }
+    
+    try {
+      await navigator.clipboard.writeText(code);
+      showToast('Your claims code was copied — send it to the host.', 'success');
+    } catch (e) {
+      showToast('Could not copy your claims code. Please try again.', 'error');
+    }
+  };
+
+  // Host imports friend's claims
+  const importFriendClaims = () => {
+    if (!importCode.trim()) {
+      showToast('Please paste the claim code.', 'error');
+      return;
+    }
+    
+    try {
+      const decoded = JSON.parse(atob(importCode.trim()));
+      const { person, claims: friendClaims, quantities } = decoded;
+      
+      if (!person || !people.includes(person)) {
+        showToast('Invalid claim code — that person is not in this receipt.', 'error');
+        return;
+      }
+      
+      // Merge friend's claims
+      const newClaims = { ...claims };
+      newClaims[person] = friendClaims || [];
+      setClaims(newClaims);
+      
+      const newQuantities = { ...claimQuantities };
+      newQuantities[person] = quantities || {};
+      setClaimQuantities(newQuantities);
+      
+      setImportCode('');
+      setShowImportModal(false);
+      showToast(`Imported ${person}'s claims!`, 'success');
+    } catch (e) {
+      showToast('Invalid claim code. Make sure you copied the entire code.', 'error');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+      {/* Toast — non-blocking notifications */}
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] px-5 py-3 rounded-lg shadow-lg text-white text-sm font-medium max-w-[90vw] text-center ${
+            toast.type === 'error' ? 'bg-red-600' : toast.type === 'success' ? 'bg-green-600' : 'bg-gray-800'
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+      <div className="max-w-4xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
+          <h1 className="text-3xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+            <DollarSignIcon className="text-indigo-600" />
+            Receipt Splitter
+          </h1>
+          <p className="text-gray-600">Split bills easily with friends</p>
+        </div>
+
+        {step === 'scan' && (
+          <div className="bg-white rounded-2xl shadow-xl p-8">
+            <div className="text-center">
+              <DollarSignIcon className="w-16 h-16 mx-auto text-indigo-600 mb-4" />
+              <h2 className="text-2xl font-bold mb-2">Create Your Receipt</h2>
+              <p className="text-gray-600 mb-6">Scan a receipt, enter items by hand, or try a sample.</p>
+
+              {/* Primary actions: Scan + Enter manually (equal weight) */}
+              <div className="grid sm:grid-cols-2 gap-3 max-w-md mx-auto mb-3">
+                <label className={`inline-flex items-center justify-center gap-2 px-6 py-4 rounded-lg transition text-lg font-medium cursor-pointer ${
+                  isProcessing ? 'bg-gray-400 cursor-not-allowed text-white' : 'bg-green-600 hover:bg-green-700 text-white'
+                }`}>
+                  <CameraIcon className="w-6 h-6" />
+                  {isProcessing ? 'Processing…' : 'Scan Receipt'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    disabled={isProcessing}
+                    className="hidden"
+                  />
+                </label>
+                <button
+                  onClick={() => setStep('review')}
+                  className="inline-flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-4 rounded-lg hover:bg-indigo-700 transition text-lg font-medium"
+                >
+                  <PlusIcon className="w-6 h-6" />
+                  Enter Manually
+                </button>
+              </div>
+              
+              {/* Secondary actions */}
+              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 mb-6 text-sm">
+                <button
+                  onClick={loadSampleReceipt}
+                  className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium"
+                >
+                  Try a sample receipt
+                </button>
+                <span className="text-gray-300" aria-hidden="true">•</span>
+                <button
+                  onClick={() => setShowJoinModal(true)}
+                  className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                >
+                  <UsersIcon className="w-4 h-4" />
+                  Join a friend's room
+                </button>
+              </div>
+              
+              {ocrError && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm max-w-md mx-auto">
+                  {ocrError}
+                </div>
+              )}
+              
+              {showRawText && rawOcrText && (
+                <div className="mb-4 max-w-lg mx-auto text-left">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-sm font-medium text-gray-700">Raw Azure response:</span>
+                    <button 
+                      onClick={() => setShowRawText(false)}
+                      className="text-gray-500 hover:text-gray-700 text-sm"
+                    >
+                      Hide
+                    </button>
+                  </div>
+                  <pre className="bg-gray-100 p-3 rounded-lg text-xs overflow-auto max-h-60 whitespace-pre-wrap border">
+                    {rawOcrText}
+                  </pre>
+                  <p className="text-xs text-gray-500 mt-2">
+                    💡 This is the raw Azure response. If items are missing, try a clearer, flatter photo with good lighting — or enter the items manually.
+                  </p>
+                </div>
+              )}
+              
+              {/* Collapsible scan settings (Azure key) — value-first: tucked away by default */}
+              <div className="mt-6 max-w-md mx-auto text-left">
+                <button
+                  type="button"
+                  onClick={() => setShowAzureSettings(v => !v)}
+                  aria-expanded={showAzureSettings}
+                  className="w-full flex items-center justify-between px-4 py-2 bg-gray-50 hover:bg-gray-100 border rounded-lg text-sm font-medium text-gray-700"
+                >
+                  <span className="flex items-center gap-2">
+                    ⚙️ Scan settings (Azure key)
+                    {AZURE_ENDPOINT && AZURE_API_KEY
+                      ? <span className="text-xs text-green-600 font-normal">Configured</span>
+                      : <span className="text-xs text-gray-400 font-normal">Needed to scan</span>}
+                  </span>
+                  <span className="text-gray-400" aria-hidden="true">{showAzureSettings ? '▲' : '▼'}</span>
+                </button>
+                {showAzureSettings && (
+                  <div className="mt-3 p-4 border rounded-lg bg-white">
+                    <label htmlFor="azure-endpoint" className="block text-sm font-medium text-gray-700 mb-2">Azure Endpoint</label>
+                    <input
+                      id="azure-endpoint"
+                      type="text"
+                      defaultValue={AZURE_ENDPOINT}
+                      onChange={(e) => saveAzureEndpoint(e.target.value)}
+                      placeholder="https://your-resource.cognitiveservices.azure.com"
+                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-3"
+                    />
+                    <label htmlFor="azure-key" className="block text-sm font-medium text-gray-700 mb-2">Azure API Key</label>
+                    <input
+                      id="azure-key"
+                      type="password"
+                      defaultValue={AZURE_API_KEY}
+                      onChange={(e) => saveAzureApiKey(e.target.value)}
+                      placeholder="Enter your Azure API key"
+                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-2">
+                      <a href="https://portal.azure.com/#create/Microsoft.CognitiveServicesFormRecognizer" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Create a free Azure resource</a> (500 pages/month free on F0 tier). Keys are stored only in your browser.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-8 pt-8 border-t">
+                <p className="text-sm text-gray-500 italic">
+                  💡 Tip: For best OCR results, take a clear photo with good lighting
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'review' && (
+          <div className="bg-white rounded-2xl shadow-xl p-6">
+            <h2 className="text-2xl font-bold mb-4">Shared Items</h2>
+            
+            <div className="space-y-3 mb-4">
+              {items.map((item, index) => (
+                <div key={item.id} className="bg-gray-50 p-3 rounded-lg">
+                  <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                    <div className="w-full sm:flex-1">
+                      <label className="block text-xs text-gray-600 mb-1 sm:hidden">Item Name</label>
+                      <input
+                        type="text"
+                        aria-label="Item name"
+                        value={item.name}
+                        onChange={(e) => updateItem(item.id, 'name', e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addItem();
+                          }
+                        }}
+                        placeholder="Item name"
+                        className="w-full px-3 py-2 border rounded"
+                      />
+                    </div>
+                    <div className="w-full sm:w-32">
+                      <label className="block text-xs text-gray-600 mb-1 sm:hidden">Price</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
+                        <input
+                          type="number"
+                          aria-label="Price"
+                          inputMode="decimal"
+                          value={item.price === 0 ? '' : item.price}
+                          onChange={(e) => updateItem(item.id, 'price', e.target.value === '' ? 0 : parseFloat(e.target.value))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              addItem();
+                            }
+                          }}
+                          placeholder="0.00"
+                          className="w-full pl-7 pr-3 py-2 border rounded"
+                          min="0"
+                          step="0.01"
+                        />
+                      </div>
+                    </div>
+                    <div className="w-full sm:w-24">
+                      <label className="block text-xs text-gray-600 mb-1 sm:hidden">Quantity</label>
+                      <input
+                        type="number"
+                        aria-label="Quantity"
+                        inputMode="decimal"
+                        value={item.qty === 0 ? '' : item.qty}
+                        onChange={(e) => updateItem(item.id, 'qty', e.target.value === '' ? 0 : parseFloat(e.target.value))}
+                        onBlur={(e) => { if (e.target.value === '' || parseFloat(e.target.value) < 0.01) updateItem(item.id, 'qty', 1); }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addItem();
+                          }
+                        }}
+                        placeholder="1"
+                        className="w-full px-3 py-2 border rounded"
+                        min="0.01"
+                        step="0.01"
+                      />
+                    </div>
+                    <button onClick={() => removeItem(item.id)} className="text-red-500 hover:text-red-700 flex-shrink-0 self-center">
+                      <XIcon className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={addItem} className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition mb-4 flex items-center gap-2">
+              <PlusIcon className="w-4 h-4" /> Add Item
+            </button>
+
+            <div className="border-t pt-4 mt-4">
+              <div className="bg-blue-50 p-4 rounded-lg mb-4">
+                <h3 className="font-semibold mb-3">Additional Charges</h3>
+                
+                <div className="space-y-3">
+                  <div>
+                    <label htmlFor="tax-input" className="block text-sm font-medium mb-1">Tax ($)</label>
+                    <input
+                      id="tax-input"
+                      type="number"
+                      inputMode="decimal"
+                      value={tax || ''}
+                      onChange={(e) => updateTax(e.target.value)}
+                      onBlur={() => flushSyncField('tax')}
+                      placeholder="0.00"
+                      className="w-full px-3 py-2 border rounded"
+                      min="0"
+                      step="0.01"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="tip-input" className="block text-sm font-medium mb-1">Tip</label>
+                    <div className="flex gap-2">
+                      <select
+                        aria-label="Tip type"
+                        value={tipType}
+                        onChange={(e) => updateTipType(e.target.value)}
+                        className="px-3 py-2 border rounded"
+                      >
+                        <option value="percent">%</option>
+                        <option value="amount">$</option>
+                      </select>
+                      <input
+                        id="tip-input"
+                        type="number"
+                        inputMode="decimal"
+                        value={tip || ''}
+                        onChange={(e) => updateTip(e.target.value)}
+                        onBlur={() => flushSyncField('tip')}
+                        placeholder={tipType === 'percent' ? '15' : '0.00'}
+                        className="flex-1 px-3 py-2 border rounded"
+                        min="0"
+                        step={tipType === 'percent' ? '1' : '0.01'}
+                      />
+                    </div>
+                    {tipType === 'percent' && (
+                      <div className="mt-2">
+                        <div className="flex gap-4 text-sm">
+                          <label className="flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="tipBase"
+                              value="subtotal"
+                              checked={tipBase === 'subtotal'}
+                              onChange={(e) => updateTipBase(e.target.value)}
+                              className="w-4 h-4"
+                            />
+                            <span>% of Subtotal</span>
+                          </label>
+                          <label className="flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="tipBase"
+                              value="subtotalPlusTax"
+                              checked={tipBase === 'subtotalPlusTax'}
+                              onChange={(e) => updateTipBase(e.target.value)}
+                              className="w-4 h-4"
+                            />
+                            <span>% of Subtotal + Tax</span>
+                          </label>
+                        </div>
+                        {tip > 0 && (
+                          <div className="text-sm text-gray-600 mt-1">
+                            Tip on {tipBase === 'subtotal' ? 'subtotal' : 'subtotal + tax'} (${tipCalculationBase.toFixed(2)}): ${tipAmount.toFixed(2)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-green-50 p-4 rounded-lg mb-4">
+                <div className="flex justify-between text-sm mb-1">
+                  <span>Subtotal:</span>
+                  <span>${subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span>Tax:</span>
+                  <span>${tax.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm mb-2 pb-2 border-b">
+                  <span>Subtotal + Tax:</span>
+                  <span className="font-medium">${subtotalPlusTax.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm mb-2">
+                  <span>Tip {tipType === 'percent' ? `(${tip}% of $${tipCalculationBase.toFixed(2)})` : ''}:</span>
+                  <span>${tipAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xl font-bold border-t pt-2">
+                  <span>Total:</span>
+                  <span>${totalBill.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <button
+                onClick={startSplitting}
+                disabled={items.length === 0}
+                className="w-full bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+              >
+                Continue to Split
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 'split' && (
+          <div className="bg-white rounded-2xl shadow-xl p-6">
+            {/* Room Code Banner */}
+            {isConnected && roomCode && (
+              <div className="mb-4 p-4 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-lg text-white">
+                <div className="flex justify-between items-center flex-wrap gap-2">
+                  <div>
+                    <div className="text-sm opacity-90">Room Code</div>
+                    <div className="text-3xl font-bold tracking-wider">{roomCode}</div>
+                  </div>
+                  <button
+                    onClick={shareRoomLink}
+                    className="bg-white text-indigo-600 px-4 py-2 rounded-lg hover:bg-indigo-50 flex items-center gap-2 font-medium"
+                  >
+                    <Share2Icon className="w-4 h-4" /> Invite Friends
+                  </button>
+                </div>
+                <div className="text-xs mt-2 opacity-75">
+                  Friends can join at {window.location.host} with this code
+                </div>
+              </div>
+            )}
+
+            {/* Create Room Button (if not in a room yet) */}
+            {!isConnected && !isClaimMode && (
+              <div className="mb-4 p-4 bg-blue-50 border-2 border-dashed border-blue-300 rounded-lg">
+                <div className="flex justify-between items-center flex-wrap gap-2">
+                  <div className="text-blue-800">
+                    <div className="font-medium">Want friends to claim their own items?</div>
+                    <div className="text-sm opacity-75">Create a room and share the code with friends</div>
+                  </div>
+                  <button
+                    onClick={createRoom}
+                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
+                  >
+                    <UsersIcon className="w-4 h-4" /> Create Room
+                  </button>
+                </div>
+                <div className="text-xs text-blue-600 mt-2">
+                  💡 Tip: All claims will sync in real-time once room is created
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+              <h2 className="text-2xl font-bold">
+                {isClaimMode ? `${selectedPerson || 'Select Your Name'} - Claim Items` : 'Claim Your Items'}
+              </h2>
+            </div>
+
+            {isClaimMode && (
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-green-800 text-sm">
+                <strong>Welcome!</strong> Select your name below, check off the items you ordered, then click "Submit My Claims" when done.
+              </div>
+            )}
+
+            {/* Person Selection + Add New Person */}
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+              <div className="flex flex-wrap gap-3 items-end">
+                {/* Select existing person */}
+                <div className="flex-1 min-w-[200px]">
+                  <label className="block text-sm font-medium mb-2">Select Person:</label>
+                  <select
+                    value={selectedPerson}
+                    onChange={(e) => setSelectedPerson(e.target.value)}
+                    className="w-full px-4 py-2 border-2 border-indigo-200 rounded-lg focus:border-indigo-600 focus:outline-none bg-white"
+                  >
+                    <option value="">-- Select --</option>
+                    {people.map(person => (
+                      <option key={person} value={person}>{person}</option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Divider */}
+                <div className="text-gray-400 font-medium pb-2">or</div>
+                
+                {/* Add new person */}
+                <div className="flex-1 min-w-[200px]">
+                  <label htmlFor="new-person-input" className="block text-sm font-medium mb-2">Add New Person:</label>
+                  <div className="flex gap-2">
+                    <input
+                      id="new-person-input"
+                      type="text"
+                      value={newPerson}
+                      onChange={(e) => setNewPerson(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addPerson();
+                        }
+                      }}
+                      placeholder="Enter name"
+                      className="flex-1 px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                    />
+                    <button
+                      onClick={() => addPerson()}
+                      className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition flex items-center gap-1"
+                    >
+                      <PlusIcon className="w-4 h-4" />
+                      Add
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              {/* People chips */}
+              {people.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-200">
+                  {people.map(person => (
+                    <span 
+                      key={person} 
+                      onClick={() => setSelectedPerson(person)}
+                      className={`px-3 py-1 rounded-full flex items-center gap-2 cursor-pointer transition ${
+                        selectedPerson === person 
+                          ? 'bg-indigo-600 text-white' 
+                          : 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200'
+                      }`}
+                    >
+                      {person}
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removePerson(person);
+                        }} 
+                        className={`hover:opacity-70 ${selectedPerson === person ? 'text-white' : 'text-indigo-600'}`}
+                      >
+                        <XIcon className="w-4 h-4" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {selectedPerson && (
+              <div className="border rounded-lg overflow-hidden">
+                <div className="bg-indigo-600 text-white px-4 py-3 font-bold flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <UsersIcon className="w-5 h-5" />
+                    {selectedPerson}'s Items
+                  </div>
+                  <button 
+                    onClick={() => {
+                      removePerson(selectedPerson);
+                    }}
+                    className="text-white hover:text-red-200 transition p-1 rounded hover:bg-indigo-700"
+                    title={`Remove ${selectedPerson}`}
+                  >
+                    <XIcon className="w-5 h-5" />
+                  </button>
+                </div>
+                
+                <div className="divide-y">
+                  {items.map(item => {
+                    const isClaimed = claims[selectedPerson]?.includes(item.id);
+                    const claimedQty = getClaimQuantity(selectedPerson, item.id);
+                    const unclaimedQty = getUnclaimedQuantity(item.id);
+                    const totalClaimed = getTotalClaimedQuantity(item.id);
+                    
+                    return (
+                      <div key={item.id} className="p-4 hover:bg-gray-50">
+                        <div className="flex items-center gap-4">
+                          <button
+                            role="checkbox"
+                            aria-checked={isClaimed}
+                            aria-label={`Claim ${item.name || 'item'}`}
+                            onClick={() => toggleClaim(selectedPerson, item.id)}
+                            className={`flex-shrink-0 w-6 h-6 rounded border-2 flex items-center justify-center transition ${
+                              isClaimed
+                                ? 'border-indigo-600 bg-indigo-600'
+                                : 'border-gray-300'
+                            }`}
+                          >
+                            {isClaimed && <CheckIcon className="w-4 h-4 text-white" />}
+                          </button>
+                          
+                          <div className="flex-1">
+                            <div className="font-medium">{item.name}</div>
+                            <div className="text-sm text-gray-600">
+                              ${item.price.toFixed(2)} × {item.qty} = ${(item.price * item.qty).toFixed(2)}
+                            </div>
+                          </div>
+
+                          {isClaimed && (
+                            <div className="flex items-center gap-1 flex-wrap justify-end">
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  inputMode="decimal"
+                                  aria-label={`Quantity of ${item.name || 'item'} claimed by ${selectedPerson}`}
+                                  min="0.01"
+                                  max={item.qty}
+                                  step="0.01"
+                                  value={claimedQty === 0 ? '' : claimedQty}
+                                  onChange={(e) => updateClaimQuantity(selectedPerson, item.id, e.target.value)}
+                                  onBlur={(e) => {
+                                    if (e.target.value === '' || parseFloat(e.target.value) <= 0) {
+                                      // toggleClaim writes the authoritative state immediately;
+                                      // drop any pending debounced qty write so it can't resurrect the claim.
+                                      if (syncTimers.current['claimQuantities']) {
+                                        clearTimeout(syncTimers.current['claimQuantities']);
+                                        delete syncTimers.current['claimQuantities'];
+                                      }
+                                      toggleClaim(selectedPerson, item.id);
+                                    } else {
+                                      flushSyncField('claimQuantities');
+                                    }
+                                  }}
+                                  className="w-16 px-2 py-1 border rounded text-center text-sm"
+                                />
+                                <span className="text-xs text-gray-500">/{item.qty}</span>
+                              </div>
+                              {/* Quick split buttons */}
+                              <div className="flex gap-1 ml-1">
+                                <button
+                                  onClick={() => updateClaimQuantity(selectedPerson, item.id, item.qty / 2)}
+                                  className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                                  title="Split in half"
+                                >
+                                  ½
+                                </button>
+                                <button
+                                  onClick={() => updateClaimQuantity(selectedPerson, item.id, item.qty / 3)}
+                                  className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                                  title="Split in thirds"
+                                >
+                                  ⅓
+                                </button>
+                                <button
+                                  onClick={() => updateClaimQuantity(selectedPerson, item.id, item.qty)}
+                                  className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                                  title="Claim all"
+                                >
+                                  All
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="text-sm text-gray-500 w-24 text-right">
+                            {unclaimedQty > 0.001 ? (
+                              <span className="text-orange-600 font-medium">
+                                {formatQty(unclaimedQty)} left
+                              </span>
+                            ) : unclaimedQty < -0.001 ? (
+                              <span className="text-red-600 font-medium">
+                                Over by {formatQty(Math.abs(unclaimedQty))}
+                              </span>
+                            ) : (
+                              <span className="text-green-600">
+                                ✓ All claimed
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {/* Show who else claimed this item */}
+                        {totalClaimed > 0 && (
+                          <div className="mt-2 ml-10 text-xs text-gray-500">
+                            {Object.keys(claims).filter(p => claims[p]?.includes(item.id)).map(p => (
+                              <span key={p} className={`inline-block mr-2 px-2 py-0.5 rounded ${p === selectedPerson ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100'}`}>
+                                {p}: {formatQty(getClaimQuantity(p, item.id))}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Subtotal/Tax/Tip Summary */}
+            <div className="bg-blue-50 p-4 rounded-lg mt-6">
+              <div className="text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span>Subtotal:</span>
+                  <span className="font-medium">${subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Tax:</span>
+                  <span className="font-medium">${tax.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between pb-1 border-b">
+                  <span>Subtotal + Tax:</span>
+                  <span className="font-medium">${subtotalPlusTax.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between pt-1">
+                  <span>Tip {tipType === 'percent' ? `(${tip}%)` : ''}:</span>
+                  <span className="font-medium">${tipAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between font-bold text-base border-t pt-1 mt-1">
+                  <span>Total:</span>
+                  <span>${totalBill.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+
+            {isClaimMode ? (
+              <>
+                <button
+                  onClick={submitMyClaims}
+                  disabled={!selectedPerson || !(claims[selectedPerson]?.length > 0)}
+                  className="w-full mt-6 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  Submit My Claims
+                </button>
+                <button
+                  onClick={startNewSplit}
+                  className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
+                >
+                  Start My Own Split
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={calculateResults}
+                  disabled={people.length === 0}
+                  className="w-full mt-6 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  Calculate Split
+                </button>
+                {/* Only show back button if not in a room, or if you're the host */}
+                {(!isConnected || isHost) && (
+                  <button
+                    onClick={() => setStep('review')}
+                    className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
+                  >
+                    Back to Bill and People Entry
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Import Claims Modal */}
+        {showImportModal && (
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
+            onClick={() => { setShowImportModal(false); setImportCode(''); }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Import friend's claims"
+              className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-xl font-bold mb-4">Import Friend's Claims</h3>
+              <p className="text-gray-600 text-sm mb-4">
+                Paste the claim code your friend sent you:
+              </p>
+              <textarea
+                autoFocus
+                value={importCode}
+                onChange={(e) => setImportCode(e.target.value)}
+                placeholder="Paste claim code here..."
+                className="w-full px-3 py-2 border rounded-lg mb-4 h-24 font-mono text-sm"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setShowImportModal(false); setImportCode(''); }}
+                  className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={importFriendClaims}
+                  className="flex-1 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+                >
+                  Import
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Join Room Modal */}
+        {showJoinModal && (
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
+            onClick={() => { setShowJoinModal(false); setJoinCode(''); setRoomError(''); }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Join a room"
+              className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-xl font-bold mb-4">Join a Room</h3>
+              <p className="text-gray-600 text-sm mb-4">
+                Enter the 5-letter room code shared by your friend:
+              </p>
+              <input
+                autoFocus
+                type="text"
+                aria-label="Room code"
+                value={joinCode}
+                onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setRoomError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && joinCode.length >= 5) joinRoom(joinCode); }}
+                placeholder="e.g. ABC12"
+                className="w-full px-4 py-3 border-2 rounded-lg mb-2 text-center text-2xl font-bold tracking-widest uppercase"
+                maxLength={5}
+              />
+              {roomError && (
+                <div className="text-red-600 text-sm mb-2">{roomError}</div>
+              )}
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={() => { setShowJoinModal(false); setJoinCode(''); setRoomError(''); }}
+                  className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => joinRoom(joinCode)}
+                  disabled={joinCode.length < 5}
+                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  Join Room
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'results' && (
+          <div className="bg-white rounded-2xl shadow-xl p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-2xl font-bold">
+                {isSharedView ? 'Shared Split Results' : 'Split Results'}
+              </h2>
+            </div>
+            
+            {isSharedView && (
+              <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-indigo-700 text-sm">
+                This is a shared view of a receipt split. Start your own split below!
+              </div>
+            )}
+            
+            <div className="space-y-3 mb-6">
+              {people.map(person => {
+                const personSubtotal = getPersonSubtotal(person);
+                const personProportion = subtotal > 0 ? personSubtotal / subtotal : (people.length > 0 ? 1 / people.length : 0);
+                const personTax = tax * personProportion;
+                const personTip = tipAmount * personProportion;
+                
+                return (
+                  <div key={person} className="bg-gradient-to-r from-indigo-50 to-blue-50 p-4 rounded-lg">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-bold text-lg">{person}</span>
+                      <span className="text-2xl font-bold text-indigo-600">
+                        ${getPersonTotal(person).toFixed(2)}
+                      </span>
+                    </div>
+                    
+                    <div className="text-sm space-y-1 mb-2">
+                      <div className="flex justify-between text-gray-600">
+                        <span>Items:</span>
+                        <span>${personSubtotal.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-600">
+                        <span>Tax:</span>
+                        <span>${personTax.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-600">
+                        <span>Tip:</span>
+                        <span>${personTip.toFixed(2)}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="text-sm text-gray-600 border-t pt-2">
+                      {claims[person]?.map(itemId => {
+                        const item = items.find(i => i.id === itemId);
+                        if (!item) return null;
+                        const personQty = getClaimQuantity(person, itemId);
+                        const totalClaimedQty = getTotalClaimedQuantity(itemId);
+                        const personItemCost = item.price * personQty;
+                        
+                        return (
+                          <div key={itemId}>
+                            {item.name} (${personItemCost.toFixed(2)})
+                            {personQty !== item.qty && ` - ${formatQty(personQty)} of ${item.qty}`}
+                            {totalClaimedQty > personQty && ` - split with others`}
+                          </div>
+                        );
+                      })}
+                      
+                      {items.some(item => getUnclaimedQuantity(item.id) > 0.001) && (
+                        <div className="mt-2 pt-2 border-t border-gray-300">
+                          <div className="font-medium text-gray-700 mb-1">Shared unclaimed items:</div>
+                          {items.map(item => {
+                            const unclaimedQty = getUnclaimedQuantity(item.id);
+                            if (unclaimedQty > 0.001) {
+                              const unclaimedValue = item.price * unclaimedQty;
+                              const personShare = unclaimedValue / people.length;
+                              return (
+                                <div key={item.id} className="text-gray-600">
+                                  {item.name} - {formatQty(unclaimedQty)} unclaimed (${personShare.toFixed(2)})
+                                </div>
+                              );
+                            }
+                            return null;
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="border-t pt-4 bg-green-50 p-4 rounded-lg">
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span>Subtotal:</span>
+                  <span className="font-medium">${subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Tax:</span>
+                  <span className="font-medium">${tax.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between pb-2 border-b">
+                  <span>Subtotal + Tax:</span>
+                  <span className="font-medium">${subtotalPlusTax.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between pt-2">
+                  <span>Tip {tipType === 'percent' ? `(${tip}%)` : ''}:</span>
+                  <span className="font-medium">${tipAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xl font-bold border-t pt-2 mt-2">
+                  <span>Total Bill:</span>
+                  <span>${totalBill.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+
+            {isSharedView ? (
+              <button
+                onClick={startNewSplit}
+                className="w-full mt-4 bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition"
+              >
+                Start My Own Split
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={shareResults}
+                  className="w-full mt-4 bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition flex items-center justify-center gap-2"
+                >
+                  <Share2Icon className="w-5 h-5" /> Share Results
+                </button>
+                <button
+                  onClick={() => setStep('split')}
+                  className="w-full mt-3 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition"
+                >
+                  Back to Edit Claims
+                </button>
+                <div className="text-center mt-6 pt-4 border-t">
+                  <button
+                    onClick={startNewSplit}
+                    className="text-indigo-600 hover:text-indigo-800 hover:underline transition"
+                  >
+                    Start a New Split
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error, info) { console.error('App error:', error, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-blue-50 to-indigo-100">
+          <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md text-center">
+            <h2 className="text-xl font-bold mb-2 text-gray-800">Something went wrong</h2>
+            <p className="text-gray-600 mb-4">The app hit an unexpected error. Starting over usually fixes it.</p>
+            <button
+              onClick={() => { window.location = window.location.pathname; }}
+              className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition"
+            >
+              Start Over
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+createRoot(document.getElementById('root')).render(<ErrorBoundary><ReceiptSplitter /></ErrorBoundary>);

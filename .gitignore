@@ -28,3 +28,9 @@ Static Archive/
 .env
 .env.local
 .env.*.local
+
+# Local key/endpoint files (defensive — the real ones live OUTSIDE this repo,
+# in the parent "Side Projects" folder, so git already can't see them)
+*[Kk]ey*.txt
+*[Ee]nd*[Pp]oint*.txt
+*[Ss]ecret*.txt
